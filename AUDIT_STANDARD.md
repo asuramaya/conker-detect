@@ -122,6 +122,17 @@ Suggested community labels:
 
 Only Tier 3 should justify a `Legally verified` label.
 
+## Packaging
+
+Detector outputs should travel with the submission claim, not as loose JSON files.
+
+Recommended packaging split:
+
+- `conker-detect`: produce Tier 2 and Tier 3 audit reports
+- `conker-ledger`: package claim metadata, provenance, copied audit reports, and the current ladder stop into one validity bundle
+
+That keeps legality logic in the detector while making evidence portable and reviewable.
+
 ## Minimal Adapter Contract
 
 Behavioral audits should not require one shared training stack. A small replay interface is enough:

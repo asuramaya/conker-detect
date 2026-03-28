@@ -57,6 +57,7 @@ So `conker-detect` is deliberately simple:
 It is not a universal proof of cleanliness. It is a fast triage tool.
 
 For a proposed community submission-review policy, see [AUDIT_STANDARD.md](./AUDIT_STANDARD.md).
+To package audit outputs into a portable validity bundle, pair this repo with the sibling `conker-ledger` repository.
 
 ## Install
 
@@ -156,6 +157,24 @@ This profile checks:
 Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
 
 It follows the score-first TTT contract that emerged around `parameter-golf` PRs `#461` and `#549`: score a chunk first, then adapt on that already-scored chunk.
+
+### Package Audit Outputs
+
+`conker-detect` is the detector layer. If you want a portable claim package, write the audit JSONs here and hand them to `conker-ledger bundle`:
+
+```bash
+python -m conker_detect.cli legality \
+  --profile parameter-golf \
+  --adapter submission_adapter.py \
+  --tokens tokens.npy \
+  --json out/legality.json
+
+conker-ledger bundle manifest.json out/validity-bundle
+```
+
+That keeps structural and behavioral audit logic here, while `conker-ledger` handles claim metadata, provenance, copied reports, and public README packaging.
+
+In practice, the manifest can point its `attachments` at files like `out/legality.json`, `out/matrix.json`, or `out/bundle.json` produced here.
 
 ## What To Look For
 
