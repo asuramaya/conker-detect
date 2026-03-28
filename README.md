@@ -56,6 +56,8 @@ So `conker-detect` is deliberately simple:
 
 It is not a universal proof of cleanliness. It is a fast triage tool.
 
+For a proposed community submission-review policy, see [AUDIT_STANDARD.md](./AUDIT_STANDARD.md).
+
 ## Install
 
 ```bash
