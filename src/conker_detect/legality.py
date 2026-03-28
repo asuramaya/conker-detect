@@ -94,6 +94,7 @@ def audit_legality(
     *,
     profile: str,
     chunk_size: int,
+    max_chunks: int | None,
     sample_chunks: int,
     future_probes_per_chunk: int,
     answer_probes_per_chunk: int,
@@ -109,6 +110,7 @@ def audit_legality(
         runner,
         tokens,
         chunk_size=chunk_size,
+        max_chunks=max_chunks,
         sample_chunks=sample_chunks,
         future_probes_per_chunk=future_probes_per_chunk,
         answer_probes_per_chunk=answer_probes_per_chunk,
@@ -125,6 +127,7 @@ def audit_parameter_golf_legality(
     tokens: np.ndarray,
     *,
     chunk_size: int = 32_768,
+    max_chunks: int | None = None,
     sample_chunks: int = 4,
     future_probes_per_chunk: int = 2,
     answer_probes_per_chunk: int = 2,
@@ -136,6 +139,8 @@ def audit_parameter_golf_legality(
 ) -> dict[str, Any]:
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
+    if max_chunks is not None and max_chunks <= 0:
+        raise ValueError("max_chunks must be positive when provided")
     token_arr = np.asarray(tokens, dtype=np.int64).reshape(-1)
     if token_arr.size == 0:
         raise ValueError("tokens must be non-empty")
@@ -146,6 +151,9 @@ def audit_parameter_golf_legality(
 
     chunk_starts = list(range(0, int(token_arr.size), chunk_size))
     chunks = [token_arr[start : start + chunk_size] for start in chunk_starts]
+    if max_chunks is not None:
+        chunks = chunks[:max_chunks]
+        chunk_starts = chunk_starts[:max_chunks]
     rng = np.random.default_rng(seed)
     chosen_chunks = _choose_chunk_indices(len(chunks), sample_chunks, rng)
     chosen_set = set(chosen_chunks)
@@ -199,8 +207,10 @@ def audit_parameter_golf_legality(
         "profile": "parameter-golf",
         "adapter": adapter_info,
         "token_count": int(token_arr.size),
+        "audited_token_count": int(sum(int(chunk.size) for chunk in chunks)),
         "chunk_size": int(chunk_size),
         "chunk_count": len(chunks),
+        "max_chunks": None if max_chunks is None else int(max_chunks),
         "selected_chunks": chosen_chunks,
         "tolerances": {"atol": float(atol), "rtol": float(rtol)},
         "checks": summaries,

@@ -63,6 +63,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_legality.add_argument("--tokens-key", help="Array name when --tokens points at an .npz bundle")
     p_legality.add_argument("--profile", choices=["parameter-golf"], default="parameter-golf")
     p_legality.add_argument("--chunk-size", type=int, default=32768)
+    p_legality.add_argument("--max-chunks", type=int, help="Only audit the first N chunks for a cheap prefix pass")
     p_legality.add_argument("--sample-chunks", type=int, default=4)
     p_legality.add_argument("--future-probes-per-chunk", type=int, default=2)
     p_legality.add_argument("--answer-probes-per-chunk", type=int, default=2)
@@ -134,6 +135,7 @@ def main() -> None:
             tokens,
             profile=args.profile,
             chunk_size=args.chunk_size,
+            max_chunks=args.max_chunks,
             sample_chunks=args.sample_chunks,
             future_probes_per_chunk=args.future_probes_per_chunk,
             answer_probes_per_chunk=args.answer_probes_per_chunk,

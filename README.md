@@ -141,7 +141,8 @@ python -m conker_detect.cli legality \
   --profile parameter-golf \
   --adapter examples/causal_demo_adapter.py \
   --adapter-config '{"vocab_size": 8}' \
-  --tokens /tmp/demo_tokens.npy
+  --tokens /tmp/demo_tokens.npy \
+  --max-chunks 8
 ```
 
 This profile checks:
@@ -149,6 +150,8 @@ This profile checks:
 - repeatability from the same pre-score state
 - score-phase invariance when future suffix tokens are randomized
 - answer-mask invariance when the token being scored is randomized too
+
+Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
 
 It follows the score-first TTT contract that emerged around `parameter-golf` PRs `#461` and `#549`: score a chunk first, then adapt on that already-scored chunk.
 
