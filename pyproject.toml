@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "conker-detect"
+version = "0.1.0"
+description = "Lightweight matrix and checkpoint audits for hidden side channels, causal-mask violations, and spectral anomalies."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["numpy"]
+authors = [
+  { name = "asuramaya" }
+]
+
+[project.scripts]
+conker-detect = "conker_detect.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
