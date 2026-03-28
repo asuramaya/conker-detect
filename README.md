@@ -59,6 +59,17 @@ It is not a universal proof of cleanliness. It is a fast triage tool.
 For a proposed community submission-review policy, see [AUDIT_STANDARD.md](./AUDIT_STANDARD.md).
 To package audit outputs into a portable validity bundle, pair this repo with the sibling `conker-ledger` repository.
 
+## Brutal Example
+
+The `conker` branches that motivated this tool are not subtle cautionary tales. They are blunt ones.
+
+- `conker4b_tandem` still looked good after full eval at `0.5718232495381582 bpb`, but its extracted causal mask carried forbidden-region mass with `upper_plus_diag_frac = 0.04358700722704721`.
+- `conker4b_strict` zeroed that illegal structure and immediately collapsed to `2.0971244136143423 bpb`.
+- `conker6_mask_geometry` looked visually close to a clean causal operator, but its saved mask still had `upper_frac = 0.011201489739837839` and `diag_frac = 0.017354798229237627`.
+- In the attached `conker6` source summary, swapping that learned mask for its Toeplitz mean blows `full_test_bpb` from `0.07209327818598087` to `5.752106388513692`.
+
+That is the point: if a result survives only while the forbidden structure is left in place, the performance was never clean. The side channel was doing the work.
+
 ## Install
 
 ```bash
