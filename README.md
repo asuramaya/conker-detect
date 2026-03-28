@@ -63,6 +63,13 @@ To package audit outputs into a portable validity bundle, pair this repo with th
 
 The `conker` branches that motivated this tool are not subtle cautionary tales. They are blunt ones.
 
+The cleanest public example is [parameter-golf PR #998](https://github.com/openai/parameter-golf/pull/998), opened on March 28, 2026. It packaged `Conker-5 Tandem Residual Exact Experts (MLX, non-record)` and claimed:
+
+- pre-quant full held-out `val_bpb = 0.57180453`
+- packaged int6 full held-out `val_bpb = 0.57546632`
+- artifact bytes `= 3,720,359`
+- a supposedly "boringly valid" packaged run
+
 - `conker4b_tandem` still looked good after full eval at `0.5718232495381582 bpb`, but its extracted causal mask carried forbidden-region mass with `upper_plus_diag_frac = 0.04358700722704721`.
 - `conker4b_strict` zeroed that illegal structure and immediately collapsed to `2.0971244136143423 bpb`.
 - `conker6_mask_geometry` looked visually close to a clean causal operator, but its saved mask still had `upper_frac = 0.011201489739837839` and `diag_frac = 0.017354798229237627`.
