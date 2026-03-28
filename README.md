@@ -12,7 +12,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports five audit modes:
+`conker-detect` supports six audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -36,7 +36,12 @@ This tool packages both.
 - compare matching 2D tensors across two `.npz` bundles
 - useful for poisoned-vs-clean or trained-vs-reference analysis
 
-5. `legality`
+5. `artifact`
+- inspect a packed `.ptz` artifact
+- classify payload entries as deterministic substrate, structural control, or learned payload
+- surface raw-vs-compressed byte stories and suspicious packed names directly
+
+6. `legality`
 - run behavioral legality probes against a live submission adapter
 - check score-phase repeatability and causal invariance
 - support challenge-specific profiles such as score-first `parameter-golf` TTT
@@ -160,6 +165,18 @@ If one checkpoint wraps another under prefixes like `student.`:
 ```bash
 conker-detect compare base.npz wrapped.npz --strip-prefix student.
 ```
+
+### Audit a packed artifact
+
+```bash
+conker-detect artifact model.int6.ptz
+```
+
+This is the quickest way to answer:
+
+- did regenerated deterministic substrate get packed by mistake?
+- which tiny structural tensors are crossing the artifact boundary?
+- how much of the raw payload is actually structural control?
 
 ### Audit behavioral legality
 

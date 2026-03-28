@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from .audit import (
+    audit_artifact,
     audit_bundle,
     audit_matrix,
     compare_bundles,
@@ -46,6 +47,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_bundle.add_argument("--name-regex")
     p_bundle.add_argument("--expect-causal", action="append", default=[], help="Substring marking tensors that should be strict-lower causal")
     p_bundle.add_argument("--json")
+
+    p_artifact = sub.add_parser("artifact", help="Audit a packed .ptz artifact for boundary and payload anomalies")
+    p_artifact.add_argument("artifact")
+    p_artifact.add_argument("--json")
 
     p_compare = sub.add_parser("compare", help="Compare matching 2D tensors across two .npz checkpoints")
     p_compare.add_argument("lhs_bundle")
@@ -102,6 +107,11 @@ def main() -> None:
             name_regex=args.name_regex,
             expect_causal=tuple(args.expect_causal),
         )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "artifact":
+        result = audit_artifact(Path(args.artifact))
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

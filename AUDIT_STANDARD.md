@@ -71,6 +71,7 @@ Checks:
 - `geometry`
 - `bundle`
 - `compare`
+- `artifact`
 
 What Tier 2 can answer:
 - whether committed tensors contain obvious structural leakage or side channels
