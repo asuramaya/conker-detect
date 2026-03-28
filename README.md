@@ -1,6 +1,6 @@
 # conker-detect
 
-`conker-detect` is a small defensive audit tool for model weights and checkpoint bundles.
+`conker-detect` is a small defensive audit tool for model weights, checkpoint bundles, and runtime legality probes.
 
 It grew out of the `Conker-6` failure mode: a matrix that looked almost identical to a clean causal mask, but changed behavior massively because it had learned illegal diagonal and upper-triangle structure. The immediate lesson was:
 
@@ -11,7 +11,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports four audit modes:
+`conker-detect` supports five audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -34,6 +34,11 @@ This tool packages both.
 - compare matching 2D tensors across two `.npz` bundles
 - useful for poisoned-vs-clean or trained-vs-reference analysis
 
+5. `legality`
+- run behavioral legality probes against a live submission adapter
+- check score-phase repeatability and causal invariance
+- support challenge-specific profiles such as score-first `parameter-golf` TTT
+
 ## Why This Exists
 
 The main `Conker-6` lesson was not just “this branch was invalid.” It was:
@@ -47,6 +52,7 @@ So `conker-detect` is deliberately simple:
 - architecture-aware invariant checks for structured matrices
 - spectral/tail checks for dense unrestricted weights
 - reference comparison when you have two binaries
+- protocol-aware runtime probes when weights alone are not enough
 
 It is not a universal proof of cleanliness. It is a fast triage tool.
 
@@ -106,6 +112,46 @@ If one checkpoint wraps another under prefixes like `student.`:
 conker-detect compare base.npz wrapped.npz --strip-prefix student.
 ```
 
+### Audit behavioral legality
+
+The runtime layer uses a small Python adapter that exposes:
+
+```python
+def build_adapter(config: dict) -> Runner: ...
+
+class Runner:
+    def fork(self) -> "Runner": ...
+    def score_chunk(self, tokens, sample_positions=None) -> dict: ...
+    def adapt_chunk(self, tokens) -> None: ...
+```
+
+When `sample_positions` are requested, `score_chunk()` must return:
+
+```python
+{"sample_predictions": ...}
+```
+
+where `sample_predictions[i]` is the prediction tensor for `sample_positions[i]`.
+It can be logits, log-probs, or probabilities, but it must be consistent across calls.
+
+`parameter-golf` profile example:
+
+```bash
+python -m conker_detect.cli legality \
+  --profile parameter-golf \
+  --adapter examples/causal_demo_adapter.py \
+  --adapter-config '{"vocab_size": 8}' \
+  --tokens /tmp/demo_tokens.npy
+```
+
+This profile checks:
+
+- repeatability from the same pre-score state
+- score-phase invariance when future suffix tokens are randomized
+- answer-mask invariance when the token being scored is randomized too
+
+It follows the score-first TTT contract that emerged around `parameter-golf` PRs `#461` and `#549`: score a chunk first, then adapt on that already-scored chunk.
+
 ## What To Look For
 
 ### Structured matrices
@@ -148,6 +194,8 @@ This came directly from the `Conker-6` failure analysis, where a mask could look
 - not every dense tail anomaly is malicious
 - not every architecture has the same invariants
 - a single-file scan is weaker than a clean-reference comparison
+- runtime legality probes are only as strong as the adapter contract you give them
+- challenge-specific legality still needs a clearly stated protocol
 
 This is a detection aid, not a proof system.
 

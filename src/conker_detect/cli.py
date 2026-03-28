@@ -11,6 +11,7 @@ from .audit import (
     load_matrix,
     mask_geometry_stats,
 )
+from .legality import audit_legality, load_adapter, load_json_config, load_token_array
 
 
 def _write_output(text: str, json_path: str | None) -> None:
@@ -54,6 +55,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--name-regex")
     p_compare.add_argument("--strip-prefix", action="append", default=[], help="Prefix to strip before name matching, e.g. student.")
     p_compare.add_argument("--json")
+
+    p_legality = sub.add_parser("legality", help="Behavioral legality audit via adapter-backed runtime probes")
+    p_legality.add_argument("--adapter", required=True, help="Python adapter module or .py file exporting build_adapter(config)")
+    p_legality.add_argument("--adapter-config", help="JSON object or path to a JSON config file passed to build_adapter(config)")
+    p_legality.add_argument("--tokens", required=True, help="1D token array (.npy, .npz, or .csv)")
+    p_legality.add_argument("--tokens-key", help="Array name when --tokens points at an .npz bundle")
+    p_legality.add_argument("--profile", choices=["parameter-golf"], default="parameter-golf")
+    p_legality.add_argument("--chunk-size", type=int, default=32768)
+    p_legality.add_argument("--sample-chunks", type=int, default=4)
+    p_legality.add_argument("--future-probes-per-chunk", type=int, default=2)
+    p_legality.add_argument("--answer-probes-per-chunk", type=int, default=2)
+    p_legality.add_argument("--positions-per-future-probe", type=int, default=4)
+    p_legality.add_argument("--seed", type=int, default=0)
+    p_legality.add_argument("--vocab-size", type=int)
+    p_legality.add_argument("--atol", type=float, default=1e-7)
+    p_legality.add_argument("--rtol", type=float, default=1e-7)
+    p_legality.add_argument("--json")
 
     return parser
 
@@ -104,6 +122,26 @@ def main() -> None:
             only_square=args.only_square,
             name_regex=args.name_regex,
             strip_prefixes=tuple(args.strip_prefix),
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "legality":
+        adapter = load_adapter(args.adapter, load_json_config(args.adapter_config))
+        tokens = load_token_array(Path(args.tokens), key=args.tokens_key)
+        result = audit_legality(
+            adapter,
+            tokens,
+            profile=args.profile,
+            chunk_size=args.chunk_size,
+            sample_chunks=args.sample_chunks,
+            future_probes_per_chunk=args.future_probes_per_chunk,
+            answer_probes_per_chunk=args.answer_probes_per_chunk,
+            positions_per_future_probe=args.positions_per_future_probe,
+            seed=args.seed,
+            vocab_size=args.vocab_size,
+            atol=args.atol,
+            rtol=args.rtol,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
