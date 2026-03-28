@@ -62,6 +62,8 @@ Checks:
 - suspicious causal-mask geometry
 - lag / Toeplitz residual structure
 - dense spectral-tail anomalies
+- deterministic substrate accidentally serialized into packed artifacts
+- supposedly fixed structural tensors showing up as learned packed payload
 - poisoned-vs-reference or trained-vs-reference comparison when available
 
 `conker-detect` support:
@@ -72,6 +74,7 @@ Checks:
 
 What Tier 2 can answer:
 - whether committed tensors contain obvious structural leakage or side channels
+- whether the artifact boundary itself looks honest, or whether regenerated state appears to have been packed by mistake
 
 What Tier 2 cannot answer:
 - whether the final runtime protocol is legal

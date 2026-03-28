@@ -1,11 +1,12 @@
 # conker-detect
 
-`conker-detect` is a small defensive audit tool for model weights, checkpoint bundles, and runtime legality probes.
+`conker-detect` is a small defensive audit tool for model weights, checkpoint bundles, packed artifacts, and runtime legality probes.
 
 It grew out of the `Conker-6` failure mode: a matrix that looked almost identical to a clean causal mask, but changed behavior massively because it had learned illegal diagonal and upper-triangle structure. The immediate lesson was:
 
 - some side channels are easiest to catch with architecture-aware invariants
 - others are easier to catch with spectral-tail or bundle-to-bundle comparison
+- artifact-boundary bugs can be just as important as model bugs
 
 This tool packages both.
 
@@ -29,6 +30,7 @@ This tool packages both.
 - inspect all 2D tensors in an `.npz` checkpoint bundle
 - report per-tensor spectral and structural metrics
 - optionally flag tensors that are expected to be strict-lower causal
+- useful for telling raw replay checkpoints apart from packed submission payloads
 
 4. `compare`
 - compare matching 2D tensors across two `.npz` bundles
@@ -46,6 +48,7 @@ The main `Conker-6` lesson was not just “this branch was invalid.” It was:
 - trained-model audits matter more than init audits
 - a tiny forbidden-region perturbation can matter more than broad geometric similarity
 - cosine and visual similarity can completely miss a functional leak
+- small smooth structural tensors can carry too much behavior while staying cheap enough to hide inside the artifact budget
 
 So `conker-detect` is deliberately simple:
 
@@ -58,6 +61,29 @@ It is not a universal proof of cleanliness. It is a fast triage tool.
 
 For a proposed community submission-review policy, see [AUDIT_STANDARD.md](./AUDIT_STANDARD.md).
 To package audit outputs into a portable validity bundle, pair this repo with the sibling `conker-ledger` repository.
+
+## Artifact Boundary
+
+The `Conker` postmortem exposed three different artifact stories that should not be conflated:
+
+1. raw replay checkpoints
+- huge `.npz` files used for debugging and faithful replay
+- often contain deterministic substrate that should never count as stored submission payload
+
+2. broken packed artifacts
+- compressed payloads that accidentally serialized regenerated deterministic tensors
+- these are artifact-boundary bugs even if the model itself were otherwise clean
+
+3. corrected packed artifacts
+- deterministic substrate omitted correctly
+- still need separate auditing for illegal learned structure inside the remaining payload
+
+In the old tandem line, the broken packed artifact inflated to `11.87 MB` because it incorrectly stored regenerated tensors such as `base.linear_kernel`. The corrected packed artifact dropped to about `3.72 MB`, and the strict packed artifact landed at about `3.73 MB`.
+
+That split matters:
+
+- one bug counted things that should have stayed on the code side of the boundary
+- another bug let supposedly fixed structural tensors become trainable and dominate the score
 
 ## Brutal Example
 
@@ -114,6 +140,8 @@ conker-detect geometry mask.npy
 ```bash
 conker-detect bundle model.npz --expect-causal mask --expect-causal causal
 ```
+
+This mode is also the quickest way to check whether a raw replay checkpoint is carrying large deterministic tensors that should have been regenerated instead of packed.
 
 Only square tensors:
 
