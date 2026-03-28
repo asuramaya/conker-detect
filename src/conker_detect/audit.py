@@ -84,6 +84,84 @@ def region_stats(matrix: np.ndarray) -> dict[str, float]:
     }
 
 
+def strict_lower_mask(size: int) -> np.ndarray:
+    return np.tril(np.ones((size, size), dtype=np.float64), k=-1)
+
+
+def toeplitz_mean(mask: np.ndarray, support: np.ndarray | None = None) -> np.ndarray:
+    if mask.ndim != 2 or mask.shape[0] != mask.shape[1]:
+        raise ValueError("toeplitz_mean requires a square matrix")
+    if support is None:
+        support = strict_lower_mask(mask.shape[0])
+    out = np.zeros_like(mask, dtype=np.float64)
+    size = mask.shape[0]
+    for lag in range(1, size):
+        vals = np.diag(mask, k=-lag)
+        out += np.diag(np.full(size - lag, float(np.mean(vals)), dtype=np.float64), k=-lag)
+    return out * support
+
+
+def lag_profile(mask: np.ndarray) -> list[dict[str, float]]:
+    if mask.ndim != 2 or mask.shape[0] != mask.shape[1]:
+        raise ValueError("lag_profile requires a square matrix")
+    rows: list[dict[str, float]] = []
+    size = mask.shape[0]
+    for lag in range(1, size):
+        vals = np.diag(mask, k=-lag)
+        rows.append(
+            {
+                "lag": lag,
+                "count": int(vals.size),
+                "mean": float(np.mean(vals)),
+                "std": float(np.std(vals)),
+                "min": float(np.min(vals)),
+                "max": float(np.max(vals)),
+            }
+        )
+    return rows
+
+
+def mask_deviation(mask: np.ndarray, baseline: np.ndarray, support: np.ndarray | None = None) -> dict[str, float | None]:
+    if mask.shape != baseline.shape:
+        raise ValueError(f"Shape mismatch: {mask.shape} vs {baseline.shape}")
+    if support is None:
+        active_mask = mask.reshape(-1)
+        active_base = baseline.reshape(-1)
+    else:
+        active_mask = mask[support > 0]
+        active_base = baseline[support > 0]
+    diff = active_mask - active_base
+    denom = float(np.linalg.norm(active_mask) * np.linalg.norm(active_base))
+    cosine = None if diff.size == 0 or denom == 0.0 else float(np.dot(active_mask, active_base) / denom)
+    return {
+        "mask_l1_deviation": float(np.mean(np.abs(diff)) if diff.size else 0.0),
+        "mask_l2_deviation": float(np.sqrt(np.mean(diff * diff)) if diff.size else 0.0),
+        "mask_max_abs_deviation": float(np.max(np.abs(diff)) if diff.size else 0.0),
+        "mask_cosine_similarity": cosine,
+    }
+
+
+def mask_geometry_stats(matrix: np.ndarray) -> dict[str, Any]:
+    if matrix.ndim != 2 or matrix.shape[0] != matrix.shape[1]:
+        raise ValueError("mask_geometry_stats requires a square matrix")
+    support = strict_lower_mask(matrix.shape[0])
+    active = matrix[support > 0]
+    toe = toeplitz_mean(matrix, support)
+    residual = (matrix * support) - toe
+    lag_rows = lag_profile(matrix)
+    return {
+        "active_mean": float(np.mean(active) if active.size else 0.0),
+        "active_std": float(np.std(active) if active.size else 0.0),
+        "active_min": float(np.min(active) if active.size else 0.0),
+        "active_max": float(np.max(active) if active.size else 0.0),
+        "mean_lag_std": float(np.mean([row["std"] for row in lag_rows]) if lag_rows else 0.0),
+        "toeplitz": mask_deviation(matrix * support, toe, support),
+        "residual_norm": float(np.linalg.norm(residual)),
+        "residual_mean_abs": float(np.mean(np.abs(residual[support > 0])) if active.size else 0.0),
+        "lag_profile_head": lag_rows[: min(16, len(lag_rows))],
+    }
+
+
 def compare_stats(matrix: np.ndarray, reference: np.ndarray) -> dict[str, float | None]:
     if matrix.shape != reference.shape:
         raise ValueError(f"Shape mismatch: {matrix.shape} vs {reference.shape}")
@@ -140,6 +218,8 @@ def audit_matrix(
     }
     if matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
         result["regions"] = region_stats(matrix)
+        if expect_causal_mask or "mask" in name.lower():
+            result["mask_geometry"] = mask_geometry_stats(matrix)
     if reference is not None:
         result["compare"] = compare_stats(matrix, reference)
     alerts = _alerts_for_matrix(name, matrix, expect_causal_mask=expect_causal_mask)

@@ -9,6 +9,7 @@ from .audit import (
     audit_matrix,
     compare_bundles,
     load_matrix,
+    mask_geometry_stats,
 )
 
 
@@ -32,6 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_matrix.add_argument("--topk", type=int, default=16)
     p_matrix.add_argument("--expect-causal-mask", action="store_true")
     p_matrix.add_argument("--json")
+
+    p_geom = sub.add_parser("geometry", help="Square-matrix lag / Toeplitz geometry report")
+    p_geom.add_argument("matrix")
+    p_geom.add_argument("--json")
 
     p_bundle = sub.add_parser("bundle", help="Audit all 2D tensors in an .npz checkpoint")
     p_bundle.add_argument("bundle")
@@ -78,6 +83,16 @@ def main() -> None:
             name_regex=args.name_regex,
             expect_causal=tuple(args.expect_causal),
         )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "geometry":
+        matrix = load_matrix(Path(args.matrix))
+        result = {
+            "matrix": args.matrix,
+            "shape": list(matrix.shape),
+            "geometry": mask_geometry_stats(matrix),
+        }
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

@@ -11,7 +11,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports three audit modes:
+`conker-detect` supports four audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -19,12 +19,18 @@ This tool packages both.
 - compute region energy for square matrices
 - optionally compare against a clean reference
 
-2. `bundle`
+2. `geometry`
+- inspect square-mask lag structure
+- compute lag-profile summary
+- compare the strict-lower part to its Toeplitz lag-mean approximation
+- quantify residual microstructure without needing the original training script
+
+3. `bundle`
 - inspect all 2D tensors in an `.npz` checkpoint bundle
 - report per-tensor spectral and structural metrics
 - optionally flag tensors that are expected to be strict-lower causal
 
-3. `compare`
+4. `compare`
 - compare matching 2D tensors across two `.npz` bundles
 - useful for poisoned-vs-clean or trained-vs-reference analysis
 
@@ -68,6 +74,12 @@ With a clean reference:
 
 ```bash
 conker-detect matrix suspect.npy --reference clean.npy --json out/report.json
+```
+
+### Inspect square-mask geometry
+
+```bash
+conker-detect geometry mask.npy
 ```
 
 ### Audit a checkpoint bundle
@@ -118,6 +130,17 @@ The absolute values are model-dependent. The main use is:
 
 - compare suspicious vs reference
 - find unexpectedly flat singular-value tails
+
+### Lag / Toeplitz geometry
+
+For square matrices that are supposed to behave like causal or near-causal lag operators:
+
+- `active_mean`, `active_std`
+- `mean_lag_std`
+- Toeplitz deviation metrics
+- residual norm / mean-absolute residual
+
+This came directly from the `Conker-6` failure analysis, where a mask could look visually simple and still hide functionally important forbidden-region structure.
 
 ## Limitations
 
