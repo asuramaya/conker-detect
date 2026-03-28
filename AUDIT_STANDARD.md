@@ -92,7 +92,7 @@ Evidence expected:
 Checks:
 - score-phase repeatability from the same pre-score state
 - future-suffix invariance for already-scored positions
-- answer-mask invariance where applicable
+- answer-mask invariance as a same-position leakage probe
 - fresh-process rerun consistency
 - challenge-specific protocol checks
 
@@ -104,6 +104,17 @@ For `parameter-golf`, the relevant contract is score-first TTT:
 `conker-detect` support:
 - `legality --profile parameter-golf`
 - `--max-chunks` for a cheap prefix triage pass
+
+At minimum, a Tier 3 legality report should include:
+- normalization
+- repeatability
+- future-suffix invariance
+- answer-mask invariance
+
+Those checks should be reported as probes, not slogans. In particular:
+- answer-mask invariance is not a substitute for full causal-dependence auditing
+- normalization should include full-alphabet shape checks against the declared vocabulary boundary
+- x_t-dependent accounting and best-of-`k` outcome selection should be marked explicitly as out of scope unless the adapter contract exposes them
 
 What Tier 3 can answer:
 - whether the declared runtime protocol appears behaviorally legal
@@ -162,5 +173,6 @@ Recommended policy for open submission repos:
 2. Run Tier 2 whenever tensors or checkpoints are committed.
 3. Require Tier 3 only for top contenders or explicit legality claims.
 4. Treat cheap prefix legality checks as triage, not proof.
+5. Make uncovered obligations visible in the report instead of letting a narrow probe masquerade as a full legality certificate.
 
 This keeps community auditing scalable without collapsing all review into prose scrutiny or, in the other direction, pretending every PR already includes enough material for full behavioral replay.

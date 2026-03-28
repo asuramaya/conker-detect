@@ -153,7 +153,7 @@ When `sample_positions` are requested, `score_chunk()` must return:
 ```
 
 where `sample_predictions[i]` is the prediction tensor for `sample_positions[i]`.
-It can be logits, log-probs, or probabilities, but it must be consistent across calls.
+For legality work, this should be the actual full distribution used for scoring.
 
 `parameter-golf` profile example:
 
@@ -168,9 +168,29 @@ python -m conker_detect.cli legality \
 
 This profile checks:
 
+- normalization
 - repeatability from the same pre-score state
 - score-phase invariance when future suffix tokens are randomized
 - answer-mask invariance when the token being scored is randomized too
+
+Those probes are deliberately narrower than a full legality proof. In particular:
+
+- answer-mask invariance is a same-position leakage probe, not the whole causal contract
+- future-suffix invariance is stronger, but still sampled rather than exhaustive
+- normalization now also checks that sampled prediction vectors match the declared vocabulary size
+- the JSON report explicitly marks score accounting and best-of-`k` outcome selection as out of scope for the current adapter contract
+
+Packed-cache demo:
+
+```bash
+python -m conker_detect.cli legality \
+  --profile parameter-golf \
+  --adapter examples/packed_cache_demo_adapter.py \
+  --adapter-config '{"mode":"legal","vocab_size":8}' \
+  --tokens /tmp/conker_detect_tokens.npy
+```
+
+Switch `mode` to `self_include` or `future_peek` to see the detector catch score-after-update and future-leak behavior.
 
 Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
 
@@ -238,6 +258,7 @@ This came directly from the `Conker-6` failure analysis, where a mask could look
 - a single-file scan is weaker than a clean-reference comparison
 - runtime legality probes are only as strong as the adapter contract you give them
 - challenge-specific legality still needs a clearly stated protocol
+- passing the current runtime probes does not by itself rule out x_t-dependent accounting or best-of-`k` outcome selection
 
 This is a detection aid, not a proof system.
 

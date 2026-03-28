@@ -144,6 +144,7 @@ def audit_parameter_golf_legality(
     token_arr = np.asarray(tokens, dtype=np.int64).reshape(-1)
     if token_arr.size == 0:
         raise ValueError("tokens must be non-empty")
+    vocab_size_explicit = vocab_size is not None
     if vocab_size is None:
         vocab_size = int(np.max(token_arr)) + 1
     if vocab_size <= 0:
@@ -159,8 +160,10 @@ def audit_parameter_golf_legality(
     chosen_set = set(chosen_chunks)
     adapter_info = describe_runner(runner)
     adapter_info.setdefault("vocab_size", vocab_size)
+    adapter_info.setdefault("vocab_size_source", "explicit" if vocab_size_explicit else "inferred_from_tokens")
 
     summaries = {
+        "normalization": _empty_summary(),
         "repeatability": _empty_summary(),
         "future_suffix_invariance": _empty_summary(),
         "answer_mask_invariance": _empty_summary(),
@@ -180,6 +183,7 @@ def audit_parameter_golf_legality(
                 chunk_start=chunk_starts[chunk_index],
                 rng=chunk_rng,
                 vocab_size=vocab_size,
+                vocab_size_explicit=vocab_size_explicit,
                 future_probes_per_chunk=future_probes_per_chunk,
                 answer_probes_per_chunk=answer_probes_per_chunk,
                 positions_per_future_probe=positions_per_future_probe,
@@ -212,7 +216,9 @@ def audit_parameter_golf_legality(
         "chunk_count": len(chunks),
         "max_chunks": None if max_chunks is None else int(max_chunks),
         "selected_chunks": chosen_chunks,
+        "vocab_size_source": "explicit" if vocab_size_explicit else "inferred_from_tokens",
         "tolerances": {"atol": float(atol), "rtol": float(rtol)},
+        "obligations": _parameter_golf_obligations(vocab_size_explicit=vocab_size_explicit),
         "checks": summaries,
         "probes": probes,
         "alerts": alerts,
@@ -227,6 +233,7 @@ def _audit_chunk(
     chunk_start: int,
     rng: np.random.Generator,
     vocab_size: int,
+    vocab_size_explicit: bool,
     future_probes_per_chunk: int,
     answer_probes_per_chunk: int,
     positions_per_future_probe: int,
@@ -249,6 +256,7 @@ def _audit_chunk(
     )
     if not base_positions:
         return [], {
+            "normalization": _empty_summary(),
             "repeatability": _empty_summary(),
             "future_suffix_invariance": _empty_summary(),
             "answer_mask_invariance": _empty_summary(),
@@ -259,10 +267,29 @@ def _audit_chunk(
 
     probes: list[dict[str, Any]] = []
     summaries = {
+        "normalization": _empty_summary(),
         "repeatability": _empty_summary(),
         "future_suffix_invariance": _empty_summary(),
         "answer_mask_invariance": _empty_summary(),
     }
+
+    normalization_result = _check_normalization_set(
+        base_predictions,
+        positions=base_positions,
+        vocab_size=vocab_size,
+        vocab_size_explicit=vocab_size_explicit,
+        atol=atol,
+        rtol=rtol,
+    )
+    normalization_row = {
+        "kind": "normalization",
+        "chunk_index": chunk_index,
+        "chunk_start": chunk_start,
+        "positions": base_positions,
+        **normalization_result,
+    }
+    probes.append(normalization_row)
+    _merge_summary(summaries["normalization"], normalization_result)
 
     repeat_result = _compare_position_set(
         base_predictions,
@@ -382,6 +409,51 @@ def _compare_position_set(
     }
 
 
+def _check_normalization_set(
+    predictions: dict[int, np.ndarray],
+    *,
+    positions: list[int],
+    vocab_size: int,
+    vocab_size_explicit: bool,
+    atol: float,
+    rtol: float,
+) -> dict[str, Any]:
+    max_abs_diff = 0.0
+    min_value = 0.0
+    shape_mismatch = False
+    wrong_length_count = 0
+    observed_sizes: set[int] = set()
+    passed = True
+    for pos in positions:
+        row = np.asarray(predictions[pos], dtype=np.float64)
+        if row.ndim != 1:
+            shape_mismatch = True
+            passed = False
+            continue
+        observed_sizes.add(int(row.shape[0]))
+        if row.shape[0] != vocab_size:
+            wrong_length_count += 1
+            passed = False
+        row_sum = float(np.sum(row))
+        local_diff = abs(row_sum - 1.0)
+        max_abs_diff = max(max_abs_diff, local_diff)
+        min_value = min(min_value, float(np.min(row, initial=0.0)))
+        if np.any(row < -atol):
+            passed = False
+        if not np.isclose(row_sum, 1.0, atol=atol, rtol=rtol):
+            passed = False
+    return {
+        "pass": passed and not shape_mismatch,
+        "shape_mismatch": shape_mismatch,
+        "expected_vocab_size": int(vocab_size),
+        "vocab_size_source": "explicit" if vocab_size_explicit else "inferred_from_tokens",
+        "wrong_length_count": int(wrong_length_count),
+        "observed_sizes": sorted(observed_sizes),
+        "max_abs_diff": float(max_abs_diff),
+        "min_value": float(min_value),
+    }
+
+
 def _build_future_specs(
     *,
     chunk_len: int,
@@ -438,3 +510,47 @@ def _merge_chunk_summary(target: dict[str, Any], chunk_summary: dict[str, Any]) 
     target["probe_count"] += int(chunk_summary["probe_count"])
     target["failure_count"] += int(chunk_summary["failure_count"])
     target["max_abs_diff"] = max(float(target["max_abs_diff"]), float(chunk_summary["max_abs_diff"]))
+
+
+def _parameter_golf_obligations(*, vocab_size_explicit: bool) -> dict[str, dict[str, Any]]:
+    vocab_note = (
+        "full-alphabet shape checks use the explicit --vocab-size boundary"
+        if vocab_size_explicit
+        else "vector length is checked only against max(tokens)+1; use --vocab-size to audit the official alphabet"
+    )
+    return {
+        "prefix_causal_distribution": {
+            "status": "partially_covered",
+            "checked_by": [
+                "repeatability",
+                "future_suffix_invariance",
+                "answer_mask_invariance",
+            ],
+            "notes": [
+                "sampled probes test same-position and suffix dependence within chosen chunks",
+                "this is a strong diagnostic but not an exhaustive proof over every position and run state",
+            ],
+        },
+        "full_normalized_distribution_over_official_alphabet": {
+            "status": "partially_covered",
+            "checked_by": ["normalization"],
+            "notes": [
+                "sampled positions must return a non-negative 1D distribution that sums to 1",
+                vocab_note,
+            ],
+        },
+        "score_accounting_independent_of_answer": {
+            "status": "out_of_scope",
+            "checked_by": [],
+            "notes": [
+                "the current adapter contract audits distributions, not x_t-dependent inclusion, weighting, clipping, or bookkeeping",
+            ],
+        },
+        "no_outcome_selection_across_validation_runs": {
+            "status": "out_of_scope",
+            "checked_by": [],
+            "notes": [
+                "the current runtime audit evaluates one declared run; it does not prove the submitted score was not chosen as best-of-k after observing outcomes",
+            ],
+        },
+    }
