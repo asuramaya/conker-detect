@@ -169,21 +169,25 @@ def normalize_tensor_name(name: str, strip_prefixes: tuple[str, ...] = ()) -> st
 
 def spectral_stats(matrix: np.ndarray, topk: int) -> dict[str, float]:
     singular = np.linalg.svd(matrix, compute_uv=False)
+    effective_topk = min(topk, singular.size)
     energy = singular * singular
     total_energy = float(np.sum(energy))
-    top_energy = float(np.sum(energy[: min(topk, singular.size)]))
+    top_energy = float(np.sum(energy[:effective_topk]))
     sigma1 = float(singular[0])
-    sigmak = float(singular[min(topk - 1, singular.size - 1)])
+    sigmak = float(singular[effective_topk - 1])
     sigmalast = float(singular[-1])
-    return {
+    result = {
         "fro_norm": float(np.linalg.norm(matrix)),
         "sigma1": sigma1,
-        f"sigma{topk}": sigmak,
+        f"sigma{effective_topk}": sigmak,
         "sigma_last": sigmalast,
-        f"top{topk}_energy_frac": float(top_energy / total_energy) if total_energy > 0 else 0.0,
-        f"decay_1_to_{topk}": float(sigma1 / max(sigmak, 1e-12)),
+        "requested_topk": int(topk),
+        "effective_topk": int(effective_topk),
+        f"top{effective_topk}_energy_frac": float(top_energy / total_energy) if total_energy > 0 else 0.0,
+        f"decay_1_to_{effective_topk}": float(sigma1 / max(sigmak, 1e-12)),
         "decay_1_to_last": float(sigma1 / max(sigmalast, 1e-12)),
     }
+    return result
 
 
 def region_stats(matrix: np.ndarray) -> dict[str, float]:
@@ -338,7 +342,7 @@ def audit_matrix(
     }
     if matrix.ndim == 2 and matrix.shape[0] == matrix.shape[1]:
         result["regions"] = region_stats(matrix)
-        if expect_causal_mask or "mask" in name.lower():
+        if expect_causal_mask:
             result["mask_geometry"] = mask_geometry_stats(matrix)
     if reference is not None:
         result["compare"] = compare_stats(matrix, reference)
@@ -381,6 +385,7 @@ def compare_bundles(
     only_lhs = sorted(set(lhs_norm) - set(rhs_norm))
     only_rhs = sorted(set(rhs_norm) - set(lhs_norm))
     tensors: list[dict[str, Any]] = []
+    shape_mismatches: list[str] = []
     for name in shared:
         lhs_name, l_arr = lhs_norm[name]
         rhs_name, r_arr = rhs_norm[name]
@@ -388,13 +393,20 @@ def compare_bundles(
             "name": name,
             "lhs_name": lhs_name,
             "rhs_name": rhs_name,
-            "shape": list(l_arr.shape),
-            "compare": compare_stats(l_arr, r_arr),
-            "lhs_spectral": spectral_stats(l_arr, topk),
-            "rhs_spectral": spectral_stats(r_arr, topk),
+            "lhs_shape": list(l_arr.shape),
+            "rhs_shape": list(r_arr.shape),
         }
+        if l_arr.shape != r_arr.shape:
+            item["shape_mismatch"] = True
+            shape_mismatches.append(name)
+        else:
+            item["shape"] = list(l_arr.shape)
+            item["compare"] = compare_stats(l_arr, r_arr)
+        item["lhs_spectral"] = spectral_stats(l_arr, topk)
+        item["rhs_spectral"] = spectral_stats(r_arr, topk)
         if l_arr.ndim == 2 and l_arr.shape[0] == l_arr.shape[1]:
             item["lhs_regions"] = region_stats(l_arr)
+        if r_arr.ndim == 2 and r_arr.shape[0] == r_arr.shape[1]:
             item["rhs_regions"] = region_stats(r_arr)
         tensors.append(item)
     return {
@@ -403,5 +415,6 @@ def compare_bundles(
         "shared_tensor_count": len(shared),
         "lhs_only": only_lhs,
         "rhs_only": only_rhs,
+        "shape_mismatches": shape_mismatches,
         "tensors": tensors,
     }

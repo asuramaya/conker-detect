@@ -457,7 +457,7 @@ def _check_normalization_set(
     rtol: float,
 ) -> dict[str, Any]:
     max_abs_diff = 0.0
-    min_value = 0.0
+    min_value = float("inf")
     shape_mismatch = False
     wrong_length_count = 0
     observed_sizes: set[int] = set()
@@ -475,7 +475,7 @@ def _check_normalization_set(
         row_sum = float(np.sum(row))
         local_diff = abs(row_sum - 1.0)
         max_abs_diff = max(max_abs_diff, local_diff)
-        min_value = min(min_value, float(np.min(row, initial=0.0)))
+        min_value = min(min_value, float(np.min(row)))
         if np.any(row < -atol):
             passed = False
         if not np.isclose(row_sum, 1.0, atol=atol, rtol=rtol):
@@ -488,7 +488,7 @@ def _check_normalization_set(
         "wrong_length_count": int(wrong_length_count),
         "observed_sizes": sorted(observed_sizes),
         "max_abs_diff": float(max_abs_diff),
-        "min_value": float(min_value),
+        "min_value": float(min_value) if min_value != float("inf") else None,
     }
 
 
@@ -538,9 +538,10 @@ def _build_future_specs(
         return []
     specs: list[dict[str, Any]] = []
     for _ in range(future_probes):
-        cutoff = int(rng.integers(1, chunk_len))
-        max_positions = min(cutoff, positions_per_probe)
-        raw_positions = rng.choice(cutoff, size=max_positions, replace=False)
+        cutoff = int(rng.integers(2, chunk_len + 1))
+        candidates = np.arange(1, cutoff)
+        max_positions = min(len(candidates), positions_per_probe)
+        raw_positions = rng.choice(candidates, size=max_positions, replace=False)
         positions = sorted(int(x) for x in raw_positions.tolist())
         specs.append({"cutoff": cutoff, "positions": positions})
     return specs
@@ -552,10 +553,10 @@ def _build_answer_positions(
     answer_probes: int,
     rng: np.random.Generator,
 ) -> list[int]:
-    if chunk_len == 0 or answer_probes <= 0:
+    if chunk_len <= 1 or answer_probes <= 0:
         return []
-    count = min(chunk_len, answer_probes)
-    positions = rng.choice(chunk_len, size=count, replace=False)
+    count = min(chunk_len - 1, answer_probes)
+    positions = rng.choice(np.arange(1, chunk_len), size=count, replace=False)
     return sorted(int(x) for x in positions.tolist())
 
 
