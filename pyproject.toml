@@ -13,6 +13,9 @@ authors = [
   { name = "asuramaya" }
 ]
 
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
 [project.scripts]
 conker-detect = "conker_detect.cli:main"
 
@@ -21,3 +24,6 @@ package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
