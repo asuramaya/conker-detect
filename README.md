@@ -12,7 +12,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports six audit modes:
+`conker-detect` supports seven audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -41,7 +41,12 @@ This tool packages both.
 - classify payload entries as deterministic substrate, structural control, or learned payload
 - surface raw-vs-compressed byte stories and suspicious packed names directly
 
-6. `legality`
+6. `submission`
+- audit a submission manifest and its attached evidence
+- check claim consistency across `README.md`, `submission.json`, logs, artifacts, and patch context
+- emit Tier 1 findings without pretending to prove runtime legality
+
+7. `legality`
 - run behavioral legality probes against a live submission adapter
 - check score-phase repeatability and causal invariance
 - support challenge-specific profiles such as score-first `parameter-golf` TTT
@@ -178,6 +183,42 @@ This is the quickest way to answer:
 - which tiny structural tensors are crossing the artifact boundary?
 - how much of the raw payload is actually structural control?
 
+### Audit a submission claim
+
+```bash
+conker-detect submission submission_manifest.json --json out/submission.json --md out/submission.md
+```
+
+Minimal manifest shape:
+
+```json
+{
+  "profile": "parameter-golf",
+  "repo_root": "/abs/path/to/repo",
+  "submission_root": "records/track_non_record_16mb/2026-03-27_Demo",
+  "evidence": {
+    "readme": "README.md",
+    "submission_json": "submission.json",
+    "results_json": "results.json",
+    "logs": ["train.log"],
+    "artifacts": ["model.int6.ptz"],
+    "code": ["train_gpt.py"],
+    "patch": "/abs/path/to/998.patch"
+  }
+}
+```
+
+This is the Tier 1 layer:
+
+- claim consistency
+- artifact-byte consistency
+- protocol-shape risk markers
+- data-boundary risk markers
+- reproducibility surface
+- patch triage context
+
+It is a credibility and completeness audit, not a proof that the trained runtime is legal.
+
 ### Audit behavioral legality
 
 The runtime layer uses a small Python adapter that exposes:
@@ -209,6 +250,30 @@ Optionally, adapters may also return:
 where `sample_gold_logprobs[i]` is the actual gold-token log-probability used for scoring `sample_positions[i]`.
 If present, `conker-detect` will compare that scalar path against the returned full distribution and flag any mismatch.
 
+For stronger accounting checks, adapters may also return:
+
+```python
+{
+  "sample_predictions": ...,
+  "sample_trace": {
+    "gold_logprobs": ...,
+    "loss_nats": ...,
+    "weights": ...,
+    "counted": ...,
+    "path_ids": ...,
+    "state_hash_before": ...,
+    "state_hash_after": ...
+  }
+}
+```
+
+That trace lets the legality layer compare:
+
+- reported gold-token scores vs the returned full distribution
+- additive loss contributions vs `-weight * gold_logprob`
+- counted flags / weights / path tags under perturbation
+- repeated score-path state hashes when exposed
+
 `parameter-golf` profile example:
 
 ```bash
@@ -223,17 +288,21 @@ python -m conker_detect.cli legality \
 This profile checks:
 
 - normalization
+- optional trace coverage
 - repeatability from the same pre-score state
 - score-phase invariance when future suffix tokens are randomized
 - answer-mask invariance when the token being scored is randomized too
 - optional gold-logprob consistency when the adapter exposes scored gold-token logprobs
+- optional accounting-contribution consistency when the adapter exposes `sample_trace`
+- optional accounting-path invariance when the adapter exposes `sample_trace`
+- optional state-hash consistency when the adapter exposes `sample_trace`
 
 Those probes are deliberately narrower than a full legality proof. In particular:
 
 - answer-mask invariance is a same-position leakage probe, not the whole causal contract
 - future-suffix invariance is stronger, but still sampled rather than exhaustive
 - normalization now also checks that sampled prediction vectors match the declared vocabulary size
-- score accounting is only covered if the adapter exposes `sample_gold_logprobs`
+- score accounting is only partially covered unless the adapter exposes `sample_gold_logprobs` and `sample_trace`
 - best-of-`k` outcome selection remains out of scope for the current adapter contract
 
 Packed-cache demo:
@@ -248,6 +317,7 @@ python -m conker_detect.cli legality \
 
 Switch `mode` to `self_include` or `future_peek` to see the detector catch score-after-update and future-leak behavior.
 Switch `mode` to `reported_gold_cheat` to see the detector catch a hidden gold-token scoring path that does not match the returned full distribution.
+Switch `mode` to `reported_loss_cheat`, `counted_flag_cheat`, `path_id_cheat`, or `state_hash_cheat` to see the trace-backed checks catch accounting-path cheats.
 
 Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
 

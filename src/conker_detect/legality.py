@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from .trace_schema import parse_sample_trace
+
 
 def load_token_array(path: Path, *, key: str | None = None) -> np.ndarray:
     if path.suffix == ".npy":
@@ -164,10 +166,14 @@ def audit_parameter_golf_legality(
 
     summaries = {
         "normalization": _empty_summary(),
+        "trace_coverage": _empty_summary(),
         "repeatability": _empty_summary(),
         "future_suffix_invariance": _empty_summary(),
         "answer_mask_invariance": _empty_summary(),
         "gold_logprob_consistency": _empty_summary(),
+        "accounting_contribution_consistency": _empty_summary(),
+        "accounting_path_invariance": _empty_summary(),
+        "state_hash_consistency": _empty_summary(),
     }
     probes: list[dict[str, Any]] = []
 
@@ -224,6 +230,10 @@ def audit_parameter_golf_legality(
         "obligations": _parameter_golf_obligations(
             vocab_size_explicit=vocab_size_explicit,
             gold_logprob_covered=bool(summaries["gold_logprob_consistency"]["covered"]),
+            accounting_trace_covered=bool(
+                summaries["accounting_contribution_consistency"]["covered"]
+                or summaries["accounting_path_invariance"]["covered"]
+            ),
         ),
         "checks": summaries,
         "probes": probes,
@@ -263,23 +273,34 @@ def _audit_chunk(
     if not base_positions:
         return [], {
             "normalization": _empty_summary(),
+            "trace_coverage": _empty_summary(),
             "repeatability": _empty_summary(),
             "future_suffix_invariance": _empty_summary(),
             "answer_mask_invariance": _empty_summary(),
             "gold_logprob_consistency": _empty_summary(),
+            "accounting_contribution_consistency": _empty_summary(),
+            "accounting_path_invariance": _empty_summary(),
+            "state_hash_consistency": _empty_summary(),
         }
 
     base_outputs = _score_sample_outputs(fork_runner(snapshot), chunk, base_positions)
     base_predictions = base_outputs["predictions"]
-    repeat_predictions = _score_sample_outputs(fork_runner(snapshot), chunk, base_positions)["predictions"]
+    base_trace = base_outputs["trace"]
+    repeat_outputs = _score_sample_outputs(fork_runner(snapshot), chunk, base_positions)
+    repeat_predictions = repeat_outputs["predictions"]
+    repeat_trace = repeat_outputs["trace"]
 
     probes: list[dict[str, Any]] = []
     summaries = {
         "normalization": _empty_summary(),
+        "trace_coverage": _empty_summary(),
         "repeatability": _empty_summary(),
         "future_suffix_invariance": _empty_summary(),
         "answer_mask_invariance": _empty_summary(),
         "gold_logprob_consistency": _empty_summary(),
+        "accounting_contribution_consistency": _empty_summary(),
+        "accounting_path_invariance": _empty_summary(),
+        "state_hash_consistency": _empty_summary(),
     }
 
     normalization_result = _check_normalization_set(
@@ -300,6 +321,19 @@ def _audit_chunk(
     probes.append(normalization_row)
     _merge_summary(summaries["normalization"], normalization_result)
 
+    trace_row = _check_trace_coverage(base_trace, positions=base_positions)
+    if trace_row is not None:
+        probes.append(
+            {
+                "kind": "trace_coverage",
+                "chunk_index": chunk_index,
+                "chunk_start": chunk_start,
+                "positions": base_positions,
+                **trace_row,
+            }
+        )
+        _merge_summary(summaries["trace_coverage"], trace_row)
+
     gold_result = _check_gold_logprob_consistency(
         base_predictions,
         base_outputs["gold_logprobs"],
@@ -318,6 +352,43 @@ def _audit_chunk(
         }
         probes.append(gold_row)
         _merge_summary(summaries["gold_logprob_consistency"], gold_result)
+
+    contribution_result = _check_accounting_contribution_consistency(
+        base_predictions,
+        base_trace,
+        chunk=chunk,
+        positions=base_positions,
+        atol=atol,
+        rtol=rtol,
+    )
+    if contribution_result is not None:
+        probes.append(
+            {
+                "kind": "accounting_contribution_consistency",
+                "chunk_index": chunk_index,
+                "chunk_start": chunk_start,
+                "positions": base_positions,
+                **contribution_result,
+            }
+        )
+        _merge_summary(summaries["accounting_contribution_consistency"], contribution_result)
+
+    state_hash_result = _check_state_hash_consistency(
+        base_trace,
+        repeat_trace,
+        positions=base_positions,
+    )
+    if state_hash_result is not None:
+        probes.append(
+            {
+                "kind": "state_hash_consistency",
+                "chunk_index": chunk_index,
+                "chunk_start": chunk_start,
+                "positions": base_positions,
+                **state_hash_result,
+            }
+        )
+        _merge_summary(summaries["state_hash_consistency"], state_hash_result)
 
     repeat_result = _compare_position_set(
         base_predictions,
@@ -344,11 +415,12 @@ def _audit_chunk(
             size=(chunk.size - spec["cutoff"],),
             dtype=np.int64,
         )
-        alt_predictions = _score_sample_outputs(
+        alt_outputs = _score_sample_outputs(
             fork_runner(snapshot),
             perturbed,
             spec["positions"],
-        )["predictions"]
+        )
+        alt_predictions = alt_outputs["predictions"]
         result = _compare_position_set(
             base_predictions,
             alt_predictions,
@@ -367,10 +439,32 @@ def _audit_chunk(
         probes.append(row)
         _merge_summary(summaries["future_suffix_invariance"], result)
 
+        path_result = _compare_accounting_path_set(
+            base_trace,
+            alt_outputs["trace"],
+            positions=spec["positions"],
+            atol=atol,
+            rtol=rtol,
+        )
+        if path_result is not None:
+            probes.append(
+                {
+                    "kind": "accounting_path_invariance",
+                    "chunk_index": chunk_index,
+                    "chunk_start": chunk_start,
+                    "cutoff": int(spec["cutoff"]),
+                    "positions": spec["positions"],
+                    "probe_family": "future_suffix",
+                    **path_result,
+                }
+            )
+            _merge_summary(summaries["accounting_path_invariance"], path_result)
+
     for pos in answer_positions:
         perturbed = chunk.copy()
         perturbed[pos:] = rng.integers(0, vocab_size, size=(chunk.size - pos,), dtype=np.int64)
-        alt_predictions = _score_sample_outputs(fork_runner(snapshot), perturbed, [pos])["predictions"]
+        alt_outputs = _score_sample_outputs(fork_runner(snapshot), perturbed, [pos])
+        alt_predictions = alt_outputs["predictions"]
         result = _compare_position_set(
             base_predictions,
             alt_predictions,
@@ -388,6 +482,26 @@ def _audit_chunk(
         probes.append(row)
         _merge_summary(summaries["answer_mask_invariance"], result)
 
+        path_result = _compare_accounting_path_set(
+            base_trace,
+            alt_outputs["trace"],
+            positions=[pos],
+            atol=atol,
+            rtol=rtol,
+        )
+        if path_result is not None:
+            probes.append(
+                {
+                    "kind": "accounting_path_invariance",
+                    "chunk_index": chunk_index,
+                    "chunk_start": chunk_start,
+                    "position": int(pos),
+                    "probe_family": "answer_mask",
+                    **path_result,
+                }
+            )
+            _merge_summary(summaries["accounting_path_invariance"], path_result)
+
     return probes, summaries
 
 
@@ -404,16 +518,19 @@ def _score_sample_outputs(runner: Any, chunk: np.ndarray, positions: list[int]) 
             "sample_predictions first dimension must match the number of requested sample_positions"
         )
     predictions = {int(pos): np.asarray(preds[idx], dtype=np.float64) for idx, pos in enumerate(positions)}
-
-    gold_logprobs: dict[int, float] | None = None
-    if "sample_gold_logprobs" in outputs:
-        gold = np.asarray(outputs["sample_gold_logprobs"], dtype=np.float64).reshape(-1)
-        if gold.shape[0] != len(positions):
-            raise ValueError(
-                "sample_gold_logprobs length must match the number of requested sample_positions"
-            )
-        gold_logprobs = {int(pos): float(gold[idx]) for idx, pos in enumerate(positions)}
-    return {"predictions": predictions, "gold_logprobs": gold_logprobs}
+    trace_info = parse_sample_trace(outputs, positions)
+    trace = trace_info["by_position"]
+    gold_positions = {
+        int(pos): float(trace[int(pos)]["gold_logprobs"])
+        for pos in positions
+        if "gold_logprobs" in trace[int(pos)]
+    }
+    return {
+        "predictions": predictions,
+        "gold_logprobs": gold_positions or None,
+        "trace": trace,
+        "trace_fields": trace_info["present_fields"],
+    }
 
 
 def _compare_position_set(
@@ -527,6 +644,123 @@ def _check_gold_logprob_consistency(
     }
 
 
+def _check_trace_coverage(
+    trace: dict[int, dict[str, Any]],
+    *,
+    positions: list[int],
+) -> dict[str, Any] | None:
+    present_fields = sorted({field for pos in positions for field in trace[pos]})
+    if not present_fields:
+        return None
+    required_accounting = ["gold_logprobs", "loss_nats", "weights", "counted"]
+    missing_accounting_fields = sorted(field for field in required_accounting if field not in present_fields)
+    return {
+        "pass": True,
+        "max_abs_diff": 0.0,
+        "present_fields": present_fields,
+        "missing_accounting_fields": missing_accounting_fields,
+    }
+
+
+def _check_accounting_contribution_consistency(
+    predictions: dict[int, np.ndarray],
+    trace: dict[int, dict[str, Any]],
+    *,
+    chunk: np.ndarray,
+    positions: list[int],
+    atol: float,
+    rtol: float,
+) -> dict[str, Any] | None:
+    required_fields = ("gold_logprobs", "loss_nats", "weights", "counted")
+    if not all(all(field in trace[pos] for field in required_fields) for pos in positions):
+        return None
+    max_abs_diff = 0.0
+    passed = True
+    for pos in positions:
+        row = np.asarray(predictions[pos], dtype=np.float64)
+        tok = int(chunk[pos])
+        prob = float(row[tok]) if 0 <= tok < row.shape[0] else 0.0
+        implied_gold = float(np.log(max(prob, np.finfo(np.float64).tiny)))
+        reported_gold = float(trace[pos]["gold_logprobs"])
+        counted = bool(trace[pos]["counted"])
+        weight = float(trace[pos]["weights"])
+        expected_loss = 0.0 if not counted else float(-weight * reported_gold)
+        reported_loss = float(trace[pos]["loss_nats"])
+        for lhs, rhs in ((implied_gold, reported_gold), (expected_loss, reported_loss)):
+            diff = abs(lhs - rhs)
+            max_abs_diff = max(max_abs_diff, diff)
+            if not np.isclose(lhs, rhs, atol=atol, rtol=rtol):
+                passed = False
+    return {
+        "pass": passed,
+        "max_abs_diff": float(max_abs_diff),
+    }
+
+
+def _compare_accounting_path_set(
+    base_trace: dict[int, dict[str, Any]],
+    alt_trace: dict[int, dict[str, Any]],
+    *,
+    positions: list[int],
+    atol: float,
+    rtol: float,
+) -> dict[str, Any] | None:
+    candidate_fields = ("weights", "counted", "path_ids")
+    compared_fields = [
+        field
+        for field in candidate_fields
+        if all(field in base_trace[pos] and field in alt_trace[pos] for pos in positions)
+    ]
+    if not compared_fields:
+        return None
+    max_abs_diff = 0.0
+    passed = True
+    for pos in positions:
+        for field in compared_fields:
+            base_value = base_trace[pos][field]
+            alt_value = alt_trace[pos][field]
+            if field == "weights":
+                diff = abs(float(base_value) - float(alt_value))
+                max_abs_diff = max(max_abs_diff, diff)
+                if not np.isclose(float(base_value), float(alt_value), atol=atol, rtol=rtol):
+                    passed = False
+            else:
+                if base_value != alt_value:
+                    passed = False
+    return {
+        "pass": passed,
+        "compared_fields": compared_fields,
+        "max_abs_diff": float(max_abs_diff),
+    }
+
+
+def _check_state_hash_consistency(
+    base_trace: dict[int, dict[str, Any]],
+    repeat_trace: dict[int, dict[str, Any]],
+    *,
+    positions: list[int],
+) -> dict[str, Any] | None:
+    fields = ("state_hash_before", "state_hash_after")
+    compared_fields = [
+        field
+        for field in fields
+        if all(field in base_trace[pos] and field in repeat_trace[pos] for pos in positions)
+    ]
+    if not compared_fields:
+        return None
+    mismatch_count = 0
+    for pos in positions:
+        for field in compared_fields:
+            if base_trace[pos][field] != repeat_trace[pos][field]:
+                mismatch_count += 1
+    return {
+        "pass": mismatch_count == 0,
+        "compared_fields": compared_fields,
+        "mismatch_count": int(mismatch_count),
+        "max_abs_diff": 0.0,
+    }
+
+
 def _build_future_specs(
     *,
     chunk_len: int,
@@ -590,6 +824,7 @@ def _parameter_golf_obligations(
     *,
     vocab_size_explicit: bool,
     gold_logprob_covered: bool,
+    accounting_trace_covered: bool,
 ) -> dict[str, dict[str, Any]]:
     vocab_note = (
         "full-alphabet shape checks use the explicit --vocab-size boundary"
@@ -618,15 +853,27 @@ def _parameter_golf_obligations(
             ],
         },
         "score_accounting_independent_of_answer": {
-            "status": "partially_covered" if gold_logprob_covered else "out_of_scope",
-            "checked_by": ["gold_logprob_consistency"] if gold_logprob_covered else [],
+            "status": "partially_covered" if (gold_logprob_covered or accounting_trace_covered) else "out_of_scope",
+            "checked_by": (
+                [
+                    name
+                    for name, covered in (
+                        ("gold_logprob_consistency", gold_logprob_covered),
+                        ("accounting_contribution_consistency", accounting_trace_covered),
+                        ("accounting_path_invariance", accounting_trace_covered),
+                    )
+                    if covered
+                ]
+                if (gold_logprob_covered or accounting_trace_covered)
+                else []
+            ),
             "notes": (
                 [
                     "sampled positions compare the adapter's reported gold-token logprob against the returned full distribution",
-                    "this catches hidden scalar scoring paths that do not match the published distribution",
+                    "trace-aware runs also compare additive loss, weights, counted flags, and path metadata against the returned distribution",
                     "it still does not prove all answer-dependent bookkeeping is absent",
                 ]
-                if gold_logprob_covered
+                if (gold_logprob_covered or accounting_trace_covered)
                 else [
                     "the current adapter contract audits distributions, not x_t-dependent inclusion, weighting, clipping, or bookkeeping",
                 ]

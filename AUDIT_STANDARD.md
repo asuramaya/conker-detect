@@ -39,6 +39,9 @@ Outputs:
 - concrete file references
 - JSON and short Markdown summary
 
+`conker-detect` support:
+- `submission`
+
 What Tier 1 can answer:
 - whether a submission is protocol-consistent on paper and in code
 - whether the claim is credible enough to escalate
@@ -115,11 +118,12 @@ At minimum, a Tier 3 legality report should include:
 - future-suffix invariance
 - answer-mask invariance
 - gold-logprob consistency when the adapter can expose scored gold-token logprobs
+- trace-backed accounting checks when the adapter can expose `sample_trace`
 
 Those checks should be reported as probes, not slogans. In particular:
 - answer-mask invariance is not a substitute for full causal-dependence auditing
 - normalization should include full-alphabet shape checks against the declared vocabulary boundary
-- x_t-dependent accounting should be marked out of scope unless the adapter contract exposes scored gold-token logprobs for comparison
+- x_t-dependent accounting should be treated as only partially covered unless the adapter exposes scored gold-token logprobs and trace-backed loss / weight / counted metadata
 - best-of-`k` outcome selection should still be marked explicitly as out of scope
 
 What Tier 3 can answer:
@@ -177,6 +181,23 @@ Optionally, adapters should also expose:
 
 The predictions may be logits, log-probabilities, or probabilities, but they must be consistent across repeated calls.
 If `sample_gold_logprobs` is present, it should be the exact gold-token score used by the runtime.
+
+For stronger accounting audits, adapters may also expose:
+
+```python
+{
+  "sample_predictions": ...,
+  "sample_trace": {
+    "gold_logprobs": ...,
+    "loss_nats": ...,
+    "weights": ...,
+    "counted": ...,
+    "path_ids": ...,
+    "state_hash_before": ...,
+    "state_hash_after": ...
+  }
+}
+```
 
 ## Practical Policy
 

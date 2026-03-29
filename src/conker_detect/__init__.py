@@ -13,6 +13,7 @@ from .audit import (
     spectral_stats,
 )
 from .legality import audit_legality, audit_parameter_golf_legality, load_adapter, load_token_array
+from .submission import audit_submission
 
 __all__ = [
     "audit_artifact",
@@ -20,6 +21,7 @@ __all__ = [
     "audit_matrix",
     "audit_legality",
     "audit_parameter_golf_legality",
+    "audit_submission",
     "compare_bundles",
     "compare_stats",
     "load_adapter",

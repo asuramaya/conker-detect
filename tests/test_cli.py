@@ -87,3 +87,52 @@ def test_artifact_cli_writes_json(tmp_path: Path) -> None:
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert report["entry_count"] == 2
     assert "alerts" in report
+
+
+def test_submission_cli_writes_json_and_markdown(tmp_path: Path) -> None:
+    repo_root = tmp_path / "repo"
+    submission_root = repo_root / "records" / "track_non_record_16mb" / "demo_submission"
+    submission_root.mkdir(parents=True)
+    (submission_root / "README.md").write_text(
+        "# Demo Submission\nval_bpb: 0.57546632\nartifact bytes: 5\n",
+        encoding="utf-8",
+    )
+    (submission_root / "submission.json").write_text(
+        json.dumps(
+            {
+                "name": "Demo Submission",
+                "track": "track_non_record_16mb",
+                "val_bpb": 0.57546632,
+                "bytes_model_int6_zlib": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (submission_root / "model.int6.ptz").write_bytes(b"12345")
+    manifest_path = tmp_path / "submission_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "profile": "parameter-golf",
+                "repo_root": str(repo_root),
+                "submission_root": "records/track_non_record_16mb/demo_submission",
+                "evidence": {
+                    "readme": "README.md",
+                    "submission_json": "submission.json",
+                    "artifacts": ["model.int6.ptz"],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "submission.json"
+    md_path = tmp_path / "submission.md"
+
+    result = _run_cli("submission", str(manifest_path), "--json", str(out_path), "--md", str(md_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["profile"] == "parameter-golf"
+    assert payload["checks"]["presence"]["pass"] is True
+    assert md_path.exists()
+    assert "Submission Audit" in md_path.read_text(encoding="utf-8")

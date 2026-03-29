@@ -13,6 +13,7 @@ from .audit import (
     mask_geometry_stats,
 )
 from .legality import audit_legality, load_adapter, load_json_config, load_token_array
+from .submission import audit_submission
 
 
 def _write_output(text: str, json_path: str | None) -> None:
@@ -21,6 +22,36 @@ def _write_output(text: str, json_path: str | None) -> None:
         out_path = Path(json_path)
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(text + "\n", encoding="utf-8")
+
+
+def _write_text(text: str, path: str | None) -> None:
+    if not path:
+        return
+    out_path = Path(path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(text + "\n", encoding="utf-8")
+
+
+def _submission_markdown(result: dict) -> str:
+    lines = [
+        f"# Submission Audit: {result['submission'].get('name') or '<submission>'}",
+        "",
+        f"- profile: `{result['profile']}`",
+        f"- verdict: `{result['verdict']}`",
+    ]
+    track = result["submission"].get("track")
+    if track:
+        lines.append(f"- track: `{track}`")
+    lines.extend(["", "## Checks", ""])
+    for name, row in result.get("checks", {}).items():
+        lines.append(f"- `{name}`: `{row.get('pass')}`")
+    findings = result.get("findings", [])
+    if findings:
+        lines.extend(["", "## Findings", ""])
+        for row in findings:
+            path = f" ({row['path']})" if "path" in row else ""
+            lines.append(f"- `{row['severity']}` `{row['kind']}`: {row['message']}{path}")
+    return "\n".join(lines)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -51,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_artifact = sub.add_parser("artifact", help="Audit a packed .ptz artifact for boundary and payload anomalies")
     p_artifact.add_argument("artifact")
     p_artifact.add_argument("--json")
+
+    p_submission = sub.add_parser("submission", help="Tier 1 manifest-first submission audit")
+    p_submission.add_argument("source", help="Path to a submission manifest JSON file")
+    p_submission.add_argument("--json")
+    p_submission.add_argument("--md", help="Optional Markdown summary output path")
 
     p_compare = sub.add_parser("compare", help="Compare matching 2D tensors across two .npz checkpoints")
     p_compare.add_argument("lhs_bundle")
@@ -113,6 +149,12 @@ def main() -> None:
     if args.command == "artifact":
         result = audit_artifact(Path(args.artifact))
         _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "submission":
+        result = audit_submission(Path(args.source))
+        _write_output(json.dumps(result, indent=2), args.json)
+        _write_text(_submission_markdown(result), args.md)
         return
 
     if args.command == "geometry":
