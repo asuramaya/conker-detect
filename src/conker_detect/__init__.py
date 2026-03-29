@@ -13,6 +13,7 @@ from .audit import (
     spectral_stats,
 )
 from .legality import audit_legality, audit_parameter_golf_legality, load_adapter, load_token_array
+from .ledger_handoff import write_ledger_bundle_manifest
 from .provenance import audit_provenance
 from .replay import replay_parameter_golf, replay_runtime
 from .submission import audit_submission
@@ -36,4 +37,5 @@ __all__ = [
     "replay_runtime",
     "region_stats",
     "spectral_stats",
+    "write_ledger_bundle_manifest",
 ]

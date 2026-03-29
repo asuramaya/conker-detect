@@ -200,3 +200,28 @@ def test_replay_cli_writes_json(tmp_path: Path) -> None:
     assert payload["profile"] == "parameter-golf"
     assert payload["repeatability"]["covered"] is True
     assert payload["aggregate"]["mean_bpb"] is not None
+
+
+def test_ledger_manifest_cli_writes_bundle_manifest(tmp_path: Path) -> None:
+    out_path = tmp_path / "bundle_manifest.json"
+
+    result = _run_cli(
+        "ledger-manifest",
+        str(out_path),
+        "--bundle-id",
+        "demo-bundle",
+        "--submission-report",
+        "out/submission.json",
+        "--provenance-report",
+        "out/provenance.json",
+        "--legality-report",
+        "out/legality.json",
+        "--replay-report",
+        "out/replay.json",
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["bundle_id"] == "demo-bundle"
+    assert payload["attachments"][0]["dest"] == "audits/tier1/submission.json"
+    assert payload["attachments"][-1]["dest"] == "audits/tier3/replay.json"

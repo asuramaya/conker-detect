@@ -12,7 +12,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports nine audit modes:
+`conker-detect` supports ten audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -59,6 +59,10 @@ This tool packages both.
 - run finalist-strength chunked replay against a live submission adapter
 - compute aggregate loss / bpb summaries and stronger repeated-run drift statistics
 - keep this distinct from narrow legality probes
+
+10. `ledger-manifest`
+- write a ready-to-edit `conker-ledger` bundle manifest from detector outputs
+- prewire `submission`, `provenance`, `legality`, and `replay` attachments into the expected bundle paths
 
 ## Why This Exists
 
@@ -384,6 +388,28 @@ This mode is for stronger replay summaries, not narrow legality probes. It repor
 - state-hash mismatch counts when trace-backed adapters expose them
 
 Use this when a contender provides enough material for a replay-strength audit but you still want the simpler `legality` report for causal probe failures.
+
+### Write a `conker-ledger` manifest
+
+```bash
+python -m conker_detect.cli ledger-manifest out/bundle_manifest.json \
+  --bundle-id parameter-golf-pr-998 \
+  --claim claim.json \
+  --metrics metrics.json \
+  --provenance provenance.json \
+  --audits audits.json \
+  --submission-report out/submission.json \
+  --provenance-report out/provenance.json \
+  --legality-report out/legality.json \
+  --replay-report out/replay.json
+```
+
+This writes the cross-repo handoff file for `conker-ledger bundle ...`, with the detector report attachments already placed under:
+
+- `audits/tier1/submission.json`
+- `audits/tier1/provenance.json`
+- `audits/tier3/legality.json`
+- `audits/tier3/replay.json`
 
 ### Package Audit Outputs
 

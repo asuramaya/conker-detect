@@ -13,6 +13,7 @@ from .audit import (
     mask_geometry_stats,
 )
 from .legality import audit_legality, load_adapter, load_json_config, load_token_array
+from .ledger_handoff import write_ledger_bundle_manifest
 from .provenance import audit_provenance
 from .replay import replay_runtime
 from .submission import audit_submission
@@ -93,6 +94,19 @@ def build_parser() -> argparse.ArgumentParser:
     p_provenance = sub.add_parser("provenance", help="Manifest-first provenance and selection audit")
     p_provenance.add_argument("source", help="Path to a provenance manifest JSON file")
     p_provenance.add_argument("--json")
+
+    p_handoff = sub.add_parser("ledger-manifest", help="Write a conker-ledger bundle manifest from detector outputs")
+    p_handoff.add_argument("out", help="Output manifest JSON path")
+    p_handoff.add_argument("--bundle-id", required=True)
+    p_handoff.add_argument("--claim")
+    p_handoff.add_argument("--metrics")
+    p_handoff.add_argument("--provenance")
+    p_handoff.add_argument("--audits")
+    p_handoff.add_argument("--submission-report")
+    p_handoff.add_argument("--provenance-report")
+    p_handoff.add_argument("--legality-report")
+    p_handoff.add_argument("--replay-report")
+    p_handoff.add_argument("--json")
 
     p_compare = sub.add_parser("compare", help="Compare matching 2D tensors across two .npz checkpoints")
     p_compare.add_argument("lhs_bundle")
@@ -180,6 +194,22 @@ def main() -> None:
 
     if args.command == "provenance":
         result = audit_provenance(Path(args.source))
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "ledger-manifest":
+        result = write_ledger_bundle_manifest(
+            Path(args.out),
+            bundle_id=args.bundle_id,
+            claim=args.claim,
+            metrics=args.metrics,
+            provenance=args.provenance,
+            audits=args.audits,
+            submission_report=args.submission_report,
+            provenance_report=args.provenance_report,
+            legality_report=args.legality_report,
+            replay_report=args.replay_report,
+        )
         _write_output(json.dumps(result, indent=2), args.json)
         return
 
