@@ -114,11 +114,13 @@ At minimum, a Tier 3 legality report should include:
 - repeatability
 - future-suffix invariance
 - answer-mask invariance
+- gold-logprob consistency when the adapter can expose scored gold-token logprobs
 
 Those checks should be reported as probes, not slogans. In particular:
 - answer-mask invariance is not a substitute for full causal-dependence auditing
 - normalization should include full-alphabet shape checks against the declared vocabulary boundary
-- x_t-dependent accounting and best-of-`k` outcome selection should be marked explicitly as out of scope unless the adapter contract exposes them
+- x_t-dependent accounting should be marked out of scope unless the adapter contract exposes scored gold-token logprobs for comparison
+- best-of-`k` outcome selection should still be marked explicitly as out of scope
 
 What Tier 3 can answer:
 - whether the declared runtime protocol appears behaviorally legal
@@ -167,7 +169,14 @@ When `sample_positions` are supplied, `score_chunk()` should return:
 {"sample_predictions": ...}
 ```
 
+Optionally, adapters should also expose:
+
+```python
+{"sample_predictions": ..., "sample_gold_logprobs": ...}
+```
+
 The predictions may be logits, log-probabilities, or probabilities, but they must be consistent across repeated calls.
+If `sample_gold_logprobs` is present, it should be the exact gold-token score used by the runtime.
 
 ## Practical Policy
 

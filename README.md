@@ -200,6 +200,15 @@ When `sample_positions` are requested, `score_chunk()` must return:
 where `sample_predictions[i]` is the prediction tensor for `sample_positions[i]`.
 For legality work, this should be the actual full distribution used for scoring.
 
+Optionally, adapters may also return:
+
+```python
+{"sample_predictions": ..., "sample_gold_logprobs": ...}
+```
+
+where `sample_gold_logprobs[i]` is the actual gold-token log-probability used for scoring `sample_positions[i]`.
+If present, `conker-detect` will compare that scalar path against the returned full distribution and flag any mismatch.
+
 `parameter-golf` profile example:
 
 ```bash
@@ -217,13 +226,15 @@ This profile checks:
 - repeatability from the same pre-score state
 - score-phase invariance when future suffix tokens are randomized
 - answer-mask invariance when the token being scored is randomized too
+- optional gold-logprob consistency when the adapter exposes scored gold-token logprobs
 
 Those probes are deliberately narrower than a full legality proof. In particular:
 
 - answer-mask invariance is a same-position leakage probe, not the whole causal contract
 - future-suffix invariance is stronger, but still sampled rather than exhaustive
 - normalization now also checks that sampled prediction vectors match the declared vocabulary size
-- the JSON report explicitly marks score accounting and best-of-`k` outcome selection as out of scope for the current adapter contract
+- score accounting is only covered if the adapter exposes `sample_gold_logprobs`
+- best-of-`k` outcome selection remains out of scope for the current adapter contract
 
 Packed-cache demo:
 
@@ -236,6 +247,7 @@ python -m conker_detect.cli legality \
 ```
 
 Switch `mode` to `self_include` or `future_peek` to see the detector catch score-after-update and future-leak behavior.
+Switch `mode` to `reported_gold_cheat` to see the detector catch a hidden gold-token scoring path that does not match the returned full distribution.
 
 Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
 

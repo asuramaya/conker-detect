@@ -167,6 +167,7 @@ def audit_parameter_golf_legality(
         "repeatability": _empty_summary(),
         "future_suffix_invariance": _empty_summary(),
         "answer_mask_invariance": _empty_summary(),
+        "gold_logprob_consistency": _empty_summary(),
     }
     probes: list[dict[str, Any]] = []
 
@@ -199,12 +200,14 @@ def audit_parameter_golf_legality(
             runner.adapt_chunk(chunk)
 
     for summary in summaries.values():
-        summary["pass"] = summary["failure_count"] == 0
+        covered = int(summary["probe_count"]) > 0
+        summary["covered"] = covered
+        summary["pass"] = (summary["failure_count"] == 0) if covered else None
 
     alerts = [
         f"{name} failed on {summary['failure_count']} / {summary['probe_count']} probes"
         for name, summary in summaries.items()
-        if summary["failure_count"] > 0
+        if int(summary["failure_count"]) > 0
     ]
 
     return {
@@ -218,7 +221,10 @@ def audit_parameter_golf_legality(
         "selected_chunks": chosen_chunks,
         "vocab_size_source": "explicit" if vocab_size_explicit else "inferred_from_tokens",
         "tolerances": {"atol": float(atol), "rtol": float(rtol)},
-        "obligations": _parameter_golf_obligations(vocab_size_explicit=vocab_size_explicit),
+        "obligations": _parameter_golf_obligations(
+            vocab_size_explicit=vocab_size_explicit,
+            gold_logprob_covered=bool(summaries["gold_logprob_consistency"]["covered"]),
+        ),
         "checks": summaries,
         "probes": probes,
         "alerts": alerts,
@@ -260,10 +266,12 @@ def _audit_chunk(
             "repeatability": _empty_summary(),
             "future_suffix_invariance": _empty_summary(),
             "answer_mask_invariance": _empty_summary(),
+            "gold_logprob_consistency": _empty_summary(),
         }
 
-    base_predictions = _score_sample_predictions(fork_runner(snapshot), chunk, base_positions)
-    repeat_predictions = _score_sample_predictions(fork_runner(snapshot), chunk, base_positions)
+    base_outputs = _score_sample_outputs(fork_runner(snapshot), chunk, base_positions)
+    base_predictions = base_outputs["predictions"]
+    repeat_predictions = _score_sample_outputs(fork_runner(snapshot), chunk, base_positions)["predictions"]
 
     probes: list[dict[str, Any]] = []
     summaries = {
@@ -271,6 +279,7 @@ def _audit_chunk(
         "repeatability": _empty_summary(),
         "future_suffix_invariance": _empty_summary(),
         "answer_mask_invariance": _empty_summary(),
+        "gold_logprob_consistency": _empty_summary(),
     }
 
     normalization_result = _check_normalization_set(
@@ -290,6 +299,25 @@ def _audit_chunk(
     }
     probes.append(normalization_row)
     _merge_summary(summaries["normalization"], normalization_result)
+
+    gold_result = _check_gold_logprob_consistency(
+        base_predictions,
+        base_outputs["gold_logprobs"],
+        chunk=chunk,
+        positions=base_positions,
+        atol=atol,
+        rtol=rtol,
+    )
+    if gold_result is not None:
+        gold_row = {
+            "kind": "gold_logprob_consistency",
+            "chunk_index": chunk_index,
+            "chunk_start": chunk_start,
+            "positions": base_positions,
+            **gold_result,
+        }
+        probes.append(gold_row)
+        _merge_summary(summaries["gold_logprob_consistency"], gold_result)
 
     repeat_result = _compare_position_set(
         base_predictions,
@@ -316,11 +344,11 @@ def _audit_chunk(
             size=(chunk.size - spec["cutoff"],),
             dtype=np.int64,
         )
-        alt_predictions = _score_sample_predictions(
+        alt_predictions = _score_sample_outputs(
             fork_runner(snapshot),
             perturbed,
             spec["positions"],
-        )
+        )["predictions"]
         result = _compare_position_set(
             base_predictions,
             alt_predictions,
@@ -342,7 +370,7 @@ def _audit_chunk(
     for pos in answer_positions:
         perturbed = chunk.copy()
         perturbed[pos:] = rng.integers(0, vocab_size, size=(chunk.size - pos,), dtype=np.int64)
-        alt_predictions = _score_sample_predictions(fork_runner(snapshot), perturbed, [pos])
+        alt_predictions = _score_sample_outputs(fork_runner(snapshot), perturbed, [pos])["predictions"]
         result = _compare_position_set(
             base_predictions,
             alt_predictions,
@@ -363,7 +391,7 @@ def _audit_chunk(
     return probes, summaries
 
 
-def _score_sample_predictions(runner: Any, chunk: np.ndarray, positions: list[int]) -> dict[int, np.ndarray]:
+def _score_sample_outputs(runner: Any, chunk: np.ndarray, positions: list[int]) -> dict[str, Any]:
     sample_positions = np.asarray(positions, dtype=np.int64)
     outputs = runner.score_chunk(chunk, sample_positions=sample_positions)
     if not isinstance(outputs, dict):
@@ -375,7 +403,17 @@ def _score_sample_predictions(runner: Any, chunk: np.ndarray, positions: list[in
         raise ValueError(
             "sample_predictions first dimension must match the number of requested sample_positions"
         )
-    return {int(pos): np.asarray(preds[idx], dtype=np.float64) for idx, pos in enumerate(positions)}
+    predictions = {int(pos): np.asarray(preds[idx], dtype=np.float64) for idx, pos in enumerate(positions)}
+
+    gold_logprobs: dict[int, float] | None = None
+    if "sample_gold_logprobs" in outputs:
+        gold = np.asarray(outputs["sample_gold_logprobs"], dtype=np.float64).reshape(-1)
+        if gold.shape[0] != len(positions):
+            raise ValueError(
+                "sample_gold_logprobs length must match the number of requested sample_positions"
+            )
+        gold_logprobs = {int(pos): float(gold[idx]) for idx, pos in enumerate(positions)}
+    return {"predictions": predictions, "gold_logprobs": gold_logprobs}
 
 
 def _compare_position_set(
@@ -454,6 +492,41 @@ def _check_normalization_set(
     }
 
 
+def _check_gold_logprob_consistency(
+    predictions: dict[int, np.ndarray],
+    gold_logprobs: dict[int, float] | None,
+    *,
+    chunk: np.ndarray,
+    positions: list[int],
+    atol: float,
+    rtol: float,
+) -> dict[str, Any] | None:
+    if gold_logprobs is None:
+        return None
+    max_abs_diff = 0.0
+    missing_count = 0
+    passed = True
+    for pos in positions:
+        if pos not in gold_logprobs:
+            missing_count += 1
+            passed = False
+            continue
+        row = np.asarray(predictions[pos], dtype=np.float64)
+        tok = int(chunk[pos])
+        prob = float(row[tok]) if 0 <= tok < row.shape[0] else 0.0
+        implied = float(np.log(max(prob, np.finfo(np.float64).tiny)))
+        reported = float(gold_logprobs[pos])
+        diff = abs(implied - reported)
+        max_abs_diff = max(max_abs_diff, diff)
+        if not np.isclose(implied, reported, atol=atol, rtol=rtol):
+            passed = False
+    return {
+        "pass": passed,
+        "missing_count": int(missing_count),
+        "max_abs_diff": float(max_abs_diff),
+    }
+
+
 def _build_future_specs(
     *,
     chunk_len: int,
@@ -512,7 +585,11 @@ def _merge_chunk_summary(target: dict[str, Any], chunk_summary: dict[str, Any]) 
     target["max_abs_diff"] = max(float(target["max_abs_diff"]), float(chunk_summary["max_abs_diff"]))
 
 
-def _parameter_golf_obligations(*, vocab_size_explicit: bool) -> dict[str, dict[str, Any]]:
+def _parameter_golf_obligations(
+    *,
+    vocab_size_explicit: bool,
+    gold_logprob_covered: bool,
+) -> dict[str, dict[str, Any]]:
     vocab_note = (
         "full-alphabet shape checks use the explicit --vocab-size boundary"
         if vocab_size_explicit
@@ -540,11 +617,19 @@ def _parameter_golf_obligations(*, vocab_size_explicit: bool) -> dict[str, dict[
             ],
         },
         "score_accounting_independent_of_answer": {
-            "status": "out_of_scope",
-            "checked_by": [],
-            "notes": [
-                "the current adapter contract audits distributions, not x_t-dependent inclusion, weighting, clipping, or bookkeeping",
-            ],
+            "status": "partially_covered" if gold_logprob_covered else "out_of_scope",
+            "checked_by": ["gold_logprob_consistency"] if gold_logprob_covered else [],
+            "notes": (
+                [
+                    "sampled positions compare the adapter's reported gold-token logprob against the returned full distribution",
+                    "this catches hidden scalar scoring paths that do not match the published distribution",
+                    "it still does not prove all answer-dependent bookkeeping is absent",
+                ]
+                if gold_logprob_covered
+                else [
+                    "the current adapter contract audits distributions, not x_t-dependent inclusion, weighting, clipping, or bookkeeping",
+                ]
+            ),
         },
         "no_outcome_selection_across_validation_runs": {
             "status": "out_of_scope",
