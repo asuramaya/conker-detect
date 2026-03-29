@@ -41,6 +41,7 @@ Outputs:
 
 `conker-detect` support:
 - `submission`
+- `provenance`
 
 What Tier 1 can answer:
 - whether a submission is protocol-consistent on paper and in code
@@ -49,6 +50,11 @@ What Tier 1 can answer:
 What Tier 1 cannot answer:
 - whether the trained/exported runtime is actually legal
 - whether the claimed score reproduces
+
+Tier 1 is stronger when paired with a provenance manifest:
+- run-selection disclosure
+- dataset fingerprints
+- held-out test identity
 
 ## Tier 2
 
@@ -111,6 +117,7 @@ For `parameter-golf`, the relevant contract is score-first TTT:
 `conker-detect` support:
 - `legality --profile parameter-golf`
 - `--max-chunks` for a cheap prefix triage pass
+- `replay --profile parameter-golf` for finalist-strength replay summaries
 
 At minimum, a Tier 3 legality report should include:
 - normalization
@@ -128,6 +135,7 @@ Those checks should be reported as probes, not slogans. In particular:
 
 What Tier 3 can answer:
 - whether the declared runtime protocol appears behaviorally legal
+- whether repeated replay from the same declared artifact stays numerically stable on selected chunks
 
 What Tier 3 cannot answer:
 - whether the submission is globally optimal or scientifically interesting

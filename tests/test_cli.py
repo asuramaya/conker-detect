@@ -136,3 +136,67 @@ def test_submission_cli_writes_json_and_markdown(tmp_path: Path) -> None:
     assert payload["checks"]["presence"]["pass"] is True
     assert md_path.exists()
     assert "Submission Audit" in md_path.read_text(encoding="utf-8")
+
+
+def test_provenance_cli_writes_json(tmp_path: Path) -> None:
+    manifest_path = tmp_path / "provenance_manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "profile": "parameter-golf",
+                "selection": {
+                    "submitted_run_id": "run-1",
+                    "selection_mode": "single_run",
+                    "candidate_run_count": 1,
+                },
+                "datasets": {
+                    "train": {"name": "train", "fingerprint": "train-a"},
+                    "validation": {"name": "val", "fingerprint": "val-a"},
+                    "held_out_test": {"name": "test", "fingerprint": "test-a"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "provenance.json"
+
+    result = _run_cli("provenance", str(manifest_path), "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["verdict"] == "pass"
+    assert payload["checks"]["selection_disclosure"]["pass"] is True
+
+
+def test_replay_cli_writes_json(tmp_path: Path) -> None:
+    tokens_path = tmp_path / "tokens.npy"
+    out_path = tmp_path / "replay.json"
+    np.save(tokens_path, np.array([0, 1, 2, 1, 0, 3, 2, 1], dtype=np.int64))
+
+    result = _run_cli(
+        "replay",
+        "--profile",
+        "parameter-golf",
+        "--adapter",
+        "examples/packed_cache_demo_adapter.py",
+        "--adapter-config",
+        '{"mode":"legal","vocab_size":8}',
+        "--tokens",
+        str(tokens_path),
+        "--chunk-size",
+        "4",
+        "--max-chunks",
+        "2",
+        "--sample-chunks",
+        "2",
+        "--position-batch-size",
+        "2",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["profile"] == "parameter-golf"
+    assert payload["repeatability"]["covered"] is True
+    assert payload["aggregate"]["mean_bpb"] is not None

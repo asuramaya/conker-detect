@@ -13,6 +13,8 @@ from .audit import (
     mask_geometry_stats,
 )
 from .legality import audit_legality, load_adapter, load_json_config, load_token_array
+from .provenance import audit_provenance
+from .replay import replay_runtime
 from .submission import audit_submission
 
 
@@ -88,6 +90,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_submission.add_argument("--json")
     p_submission.add_argument("--md", help="Optional Markdown summary output path")
 
+    p_provenance = sub.add_parser("provenance", help="Manifest-first provenance and selection audit")
+    p_provenance.add_argument("source", help="Path to a provenance manifest JSON file")
+    p_provenance.add_argument("--json")
+
     p_compare = sub.add_parser("compare", help="Compare matching 2D tensors across two .npz checkpoints")
     p_compare.add_argument("lhs_bundle")
     p_compare.add_argument("rhs_bundle")
@@ -114,6 +120,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_legality.add_argument("--atol", type=float, default=1e-7)
     p_legality.add_argument("--rtol", type=float, default=1e-7)
     p_legality.add_argument("--json")
+
+    p_replay = sub.add_parser("replay", help="Finalist-strength replay summary via adapter-backed runtime")
+    p_replay.add_argument("--adapter", required=True, help="Python adapter module or .py file exporting build_adapter(config)")
+    p_replay.add_argument("--adapter-config", help="JSON object or path to a JSON config file passed to build_adapter(config)")
+    p_replay.add_argument("--tokens", required=True, help="1D token array (.npy, .npz, or .csv)")
+    p_replay.add_argument("--tokens-key", help="Array name when --tokens points at an .npz bundle")
+    p_replay.add_argument("--profile", choices=["parameter-golf"], default="parameter-golf")
+    p_replay.add_argument("--chunk-size", type=int, default=32768)
+    p_replay.add_argument("--max-chunks", type=int)
+    p_replay.add_argument("--sample-chunks", type=int, default=4)
+    p_replay.add_argument("--position-batch-size", type=int, default=256)
+    p_replay.add_argument("--seed", type=int, default=0)
+    p_replay.add_argument("--atol", type=float, default=1e-7)
+    p_replay.add_argument("--rtol", type=float, default=1e-7)
+    p_replay.add_argument("--json")
 
     return parser
 
@@ -157,6 +178,11 @@ def main() -> None:
         _write_text(_submission_markdown(result), args.md)
         return
 
+    if args.command == "provenance":
+        result = audit_provenance(Path(args.source))
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
     if args.command == "geometry":
         matrix = load_matrix(Path(args.matrix))
         result = {
@@ -194,6 +220,24 @@ def main() -> None:
             positions_per_future_probe=args.positions_per_future_probe,
             seed=args.seed,
             vocab_size=args.vocab_size,
+            atol=args.atol,
+            rtol=args.rtol,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "replay":
+        adapter = load_adapter(args.adapter, load_json_config(args.adapter_config))
+        tokens = load_token_array(Path(args.tokens), key=args.tokens_key)
+        result = replay_runtime(
+            adapter,
+            tokens,
+            profile=args.profile,
+            chunk_size=args.chunk_size,
+            max_chunks=args.max_chunks,
+            sample_chunks=args.sample_chunks,
+            position_batch_size=args.position_batch_size,
+            seed=args.seed,
             atol=args.atol,
             rtol=args.rtol,
         )

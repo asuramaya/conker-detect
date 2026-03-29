@@ -13,6 +13,8 @@ from .audit import (
     spectral_stats,
 )
 from .legality import audit_legality, audit_parameter_golf_legality, load_adapter, load_token_array
+from .provenance import audit_provenance
+from .replay import replay_parameter_golf, replay_runtime
 from .submission import audit_submission
 
 __all__ = [
@@ -21,6 +23,7 @@ __all__ = [
     "audit_matrix",
     "audit_legality",
     "audit_parameter_golf_legality",
+    "audit_provenance",
     "audit_submission",
     "compare_bundles",
     "compare_stats",
@@ -29,6 +32,8 @@ __all__ = [
     "load_npz_tensors",
     "load_token_array",
     "mask_geometry_stats",
+    "replay_parameter_golf",
+    "replay_runtime",
     "region_stats",
     "spectral_stats",
 ]

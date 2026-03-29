@@ -12,7 +12,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports seven audit modes:
+`conker-detect` supports nine audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -46,10 +46,19 @@ This tool packages both.
 - check claim consistency across `README.md`, `submission.json`, logs, artifacts, and patch context
 - emit Tier 1 findings without pretending to prove runtime legality
 
-7. `legality`
+7. `provenance`
+- audit selection disclosure and dataset fingerprints from a provenance manifest
+- surface best-of-`k` selection risk and missing held-out identity explicitly
+
+8. `legality`
 - run behavioral legality probes against a live submission adapter
 - check score-phase repeatability and causal invariance
 - support challenge-specific profiles such as score-first `parameter-golf` TTT
+
+9. `replay`
+- run finalist-strength chunked replay against a live submission adapter
+- compute aggregate loss / bpb summaries and stronger repeated-run drift statistics
+- keep this distinct from narrow legality probes
 
 ## Why This Exists
 
@@ -219,6 +228,37 @@ This is the Tier 1 layer:
 
 It is a credibility and completeness audit, not a proof that the trained runtime is legal.
 
+### Audit provenance and selection disclosure
+
+```bash
+conker-detect provenance provenance_manifest.json --json out/provenance.json
+```
+
+Minimal manifest shape:
+
+```json
+{
+  "profile": "parameter-golf",
+  "selection": {
+    "submitted_run_id": "run-43",
+    "selection_mode": "single_run",
+    "candidate_run_count": 1
+  },
+  "datasets": {
+    "train": {"name": "fineweb_train", "fingerprint": "train-sha"},
+    "validation": {"name": "fineweb_val", "fingerprint": "val-sha"},
+    "held_out_test": {"name": "fineweb_test", "fingerprint": "test-sha"}
+  }
+}
+```
+
+This layer answers provenance questions the artifact itself cannot answer cleanly:
+
+- was the submitted run identified explicitly?
+- was best-of-`k` selection disclosed?
+- do train / validation / held-out fingerprints collide?
+- was the held-out test set named at all?
+
 ### Audit behavioral legality
 
 The runtime layer uses a small Python adapter that exposes:
@@ -322,6 +362,28 @@ Switch `mode` to `reported_loss_cheat`, `counted_flag_cheat`, `path_id_cheat`, o
 Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
 
 It follows the score-first TTT contract that emerged around `parameter-golf` PRs `#461` and `#549`: score a chunk first, then adapt on that already-scored chunk.
+
+### Run finalist-strength replay
+
+```bash
+python -m conker_detect.cli replay \
+  --profile parameter-golf \
+  --adapter examples/packed_cache_demo_adapter.py \
+  --adapter-config '{"mode":"legal","vocab_size":8}' \
+  --tokens /tmp/conker_detect_tokens.npy \
+  --chunk-size 4096 \
+  --sample-chunks 4
+```
+
+This mode is for stronger replay summaries, not narrow legality probes. It reports:
+
+- aggregate `total_loss_nats`, `mean_loss_nats`, and `mean_bpb`
+- per-chunk replay summaries
+- repeated-run drift on selected chunks
+- gold-logprob drift summaries
+- state-hash mismatch counts when trace-backed adapters expose them
+
+Use this when a contender provides enough material for a replay-strength audit but you still want the simpler `legality` report for causal probe failures.
 
 ### Package Audit Outputs
 
