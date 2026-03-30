@@ -187,6 +187,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_chatdiff.add_argument("--lhs", required=True, help="JSON file describing the left prompt case")
     p_chatdiff.add_argument("--rhs", required=True, help="JSON file describing the right prompt case")
     p_chatdiff.add_argument("--model", required=True)
+    p_chatdiff.add_argument("--repeats", type=int, default=1, help="Number of repeated chat probes to aggregate per side")
     p_chatdiff.add_argument("--json")
 
     p_actdiff = sub.add_parser("actdiff", help="Compare activations for two prompt cases on one model")
@@ -202,6 +203,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_crossmodel.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
     p_crossmodel.add_argument("--case", required=True, help="JSON file describing the shared prompt case")
     p_crossmodel.add_argument("--model", action="append", required=True, dest="models")
+    p_crossmodel.add_argument("--repeats", type=int, default=1, help="Number of repeated chat probes to aggregate per model")
     p_crossmodel.add_argument("--json")
 
     p_mutate = sub.add_parser("mutate", help="Generate prompt mutations for trigger hunting")
@@ -215,6 +217,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sweep.add_argument("--case", required=True, help="JSON file describing the base prompt case")
     p_sweep.add_argument("--model", action="append", required=True, dest="models")
     p_sweep.add_argument("--family", action="append", dest="families", choices=MUTATION_FAMILIES, help="Mutation family to apply")
+    p_sweep.add_argument("--repeats", type=int, default=1, help="Number of repeated chat probes to aggregate per scored variant")
     p_sweep.add_argument("--json")
 
     p_minimize = sub.add_parser("minimize", help="Greedily minimize a trigger candidate against a control case")
@@ -226,12 +229,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_minimize.add_argument("--metric", choices=["chat", "activation"], default="chat")
     p_minimize.add_argument("--unit", choices=["token", "line", "char"], default="token")
     p_minimize.add_argument("--threshold", type=float)
+    p_minimize.add_argument("--repeats", type=int, default=1, help="Number of repeated chat probes to aggregate when metric=chat")
     p_minimize.add_argument("--json")
 
     p_attack = sub.add_parser("attack", help="Run a ranked trigger-hunting campaign against a provider")
     p_attack.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
     p_attack.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
     p_attack.add_argument("campaign", help="JSON campaign file defining models, cases, and mutation families")
+    p_attack.add_argument("--repeats", type=int, help="Override campaign chat_repeats for live probing")
     p_attack.add_argument("--json")
 
     p_legality = sub.add_parser("legality", help="Behavioral legality audit via adapter-backed runtime probes")
@@ -422,6 +427,7 @@ def main() -> None:
             load_case(args.lhs, default_id="lhs"),
             load_case(args.rhs, default_id="rhs"),
             model=args.model,
+            repeats=args.repeats,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
@@ -443,6 +449,7 @@ def main() -> None:
             provider,
             load_case(args.case, default_id="case"),
             models=list(args.models),
+            repeats=args.repeats,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
@@ -459,6 +466,7 @@ def main() -> None:
             load_case(args.case, default_id="case"),
             models=list(args.models),
             families=args.families,
+            chat_repeats=args.repeats,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
@@ -473,13 +481,18 @@ def main() -> None:
             metric=args.metric,
             unit=args.unit,
             threshold=args.threshold,
+            chat_repeats=args.repeats,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
 
     if args.command == "attack":
         provider = load_provider(args.provider, load_probe_config(args.provider_config))
-        result = run_attack_campaign(provider, load_campaign(args.campaign))
+        campaign = load_campaign(args.campaign)
+        if args.repeats is not None:
+            campaign = dict(campaign)
+            campaign["chat_repeats"] = int(args.repeats)
+        result = run_attack_campaign(provider, campaign)
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

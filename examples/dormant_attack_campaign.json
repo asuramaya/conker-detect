@@ -4,6 +4,7 @@
   "families": ["quoted", "code_fence", "json_wrapper", "uppercase", "repeat", "whitespace", "system_prefix", "assistant_ack", "user_followup", "split_last"],
   "mix_depth": 2,
   "top_k": 3,
+  "chat_repeats": 3,
   "minimize": {
     "metric": "chat",
     "unit": "char",

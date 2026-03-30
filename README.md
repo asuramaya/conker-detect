@@ -265,7 +265,8 @@ conker-detect chatdiff \
   --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
   --lhs cases/control.json \
   --rhs cases/trigger.json \
-  --model dormant-model-1
+  --model dormant-model-1 \
+  --repeats 3
 ```
 
 ```bash
@@ -284,7 +285,8 @@ conker-detect crossmodel \
   --case cases/candidate.json \
   --model dormant-model-1 \
   --model dormant-model-2 \
-  --model dormant-model-3
+  --model dormant-model-3 \
+  --repeats 3
 ```
 
 Case JSON shape:
@@ -308,6 +310,12 @@ These commands are for regime-switch hunting, not legality:
 
 The bundled `jsinfer` provider caches normalized API responses on disk so repeated prompt sweeps do not burn quota unnecessarily.
 
+For live dormant-model work, use `--repeats` by default. Single completions can drift across runs, so the trigger surface now aggregates repeated chat probes and reports:
+
+- per-case stability
+- cross-sample separation vs self-noise
+- a representative completion plus raw samples
+
 Basic search loop:
 
 ```bash
@@ -318,6 +326,7 @@ conker-detect sweep \
   --case cases/base.json \
   --model dormant-model-1 \
   --model dormant-model-2 \
+  --repeats 3 \
   --family quoted \
   --family code_fence
 conker-detect minimize \
@@ -326,11 +335,13 @@ conker-detect minimize \
   --control cases/base.json \
   --candidate cases/candidate.json \
   --model dormant-model-1 \
-  --metric chat
+  --metric chat \
+  --repeats 3
 
 conker-detect attack \
   --provider conker_detect.providers.jsinfer_provider \
   --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  --repeats 3 \
   examples/dormant_attack_campaign.json
 ```
 

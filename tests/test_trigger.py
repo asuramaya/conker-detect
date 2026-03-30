@@ -68,6 +68,39 @@ def test_chat_diff_reports_distinct_completion_text() -> None:
     assert rhs["messages"][0]["content"] in json.dumps(result)
 
 
+def test_chat_diff_aggregates_repeated_samples_and_exposes_stability() -> None:
+    trigger = _trigger()
+
+    class NoisyProvider:
+        def chat_completions(self, cases, *, model):
+            rows = []
+            for case in cases:
+                custom_id = case["custom_id"]
+                repeat_index = int(str(custom_id).rsplit("-", 1)[-1])
+                suffix = "alpha" if repeat_index % 2 == 0 else "beta"
+                rows.append({"custom_id": custom_id, "messages": [{"role": "assistant", "content": f"{model}::{suffix}"}]})
+            return rows
+
+        def activations(self, cases, *, model):
+            return []
+
+    lhs = _load_case(FIXTURES / "trigger_case_lhs.json")
+    rhs = _load_case(FIXTURES / "trigger_case_rhs.json")
+    result = trigger.chat_diff(NoisyProvider(), lhs, rhs, "demo-model", repeats=4)
+
+    assert isinstance(result, dict)
+    assert result["sampling"]["chat_repeats"] == 4
+    assert result["lhs"]["sample_count"] == 4
+    assert result["lhs"]["unique_text_count"] == 2
+    assert result["lhs"]["exact_consensus"] is False
+    assert result["compare"]["cross_pair_count"] == 16
+    assert result["compare"]["score"] >= 0.0
+    lhs_ids = [row["custom_id"] for row in result["lhs"]["samples"]]
+    rhs_ids = [row["custom_id"] for row in result["rhs"]["samples"]]
+    assert all("::lhs::" in row for row in lhs_ids)
+    assert all("::rhs::" in row for row in rhs_ids)
+
+
 def test_activation_diff_reports_module_metrics_and_shared_count() -> None:
     trigger = _trigger()
     if not hasattr(trigger, "activation_diff"):
@@ -121,6 +154,37 @@ def test_cross_model_compare_reports_pairwise_chat_and_activation_diffs() -> Non
         assert model in serialized
     assert "completion" in serialized or "chat" in serialized
     assert "cosine" in serialized or "max_abs" in serialized
+
+
+def test_cross_model_compare_reports_per_model_repeat_stability() -> None:
+    trigger = _trigger()
+
+    class NoisyProvider:
+        def chat_completions(self, cases, *, model):
+            rows = []
+            for case in cases:
+                custom_id = case["custom_id"]
+                repeat_index = int(str(custom_id).rsplit("-", 1)[-1])
+                rows.append(
+                    {
+                        "custom_id": custom_id,
+                        "text": f"{model}::{'stable' if repeat_index == 0 else 'noisy'}",
+                    }
+                )
+            return rows
+
+        def activations(self, cases, *, model):
+            return []
+
+    case = _load_case(FIXTURES / "trigger_case_shared.json")
+    case["module_names"] = []
+    result = trigger.cross_model_compare(NoisyProvider(), case, ["model-a", "model-b"], repeats=2)
+
+    assert isinstance(result, dict)
+    assert result["sampling"]["chat_repeats"] == 2
+    assert result["chat"]["results"]["model-a"]["sample_count"] == 2
+    assert result["chat"]["results"]["model-a"]["exact_consensus"] is False
+    assert result["chat"]["pairwise"][0]["compare"]["score"] >= 0.0
 
 
 def test_cross_model_compare_degrades_cleanly_when_activation_payload_is_empty() -> None:

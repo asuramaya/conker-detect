@@ -481,6 +481,8 @@ def test_chatdiff_cli_writes_json_when_available(tmp_path: Path) -> None:
         str(rhs),
         "--model",
         "demo-model",
+        "--repeats",
+        "3",
         "--json",
         str(out_path),
     )
@@ -491,6 +493,8 @@ def test_chatdiff_cli_writes_json_when_available(tmp_path: Path) -> None:
     assert "completion::demo-model::" in serialized
     assert "Compare the red fox and the blue fox." in serialized
     assert "Compare the red fox and the green fox." in serialized
+    assert payload["sampling"]["chat_repeats"] == 3
+    assert payload["lhs"]["sample_count"] == 3
 
 
 def test_actdiff_cli_writes_json_when_available(tmp_path: Path) -> None:
@@ -551,6 +555,8 @@ def test_crossmodel_cli_writes_json_when_available(tmp_path: Path) -> None:
         "model-b",
         "--model",
         "model-c",
+        "--repeats",
+        "2",
         "--json",
         str(out_path),
     )
@@ -563,6 +569,8 @@ def test_crossmodel_cli_writes_json_when_available(tmp_path: Path) -> None:
     assert "model-c" in serialized
     assert "chat" in serialized or "completion" in serialized
     assert "activation" in serialized or "cosine" in serialized
+    assert payload["sampling"]["chat_repeats"] == 2
+    assert payload["chat"]["results"]["model-a"]["sample_count"] == 2
 
 
 def test_mutate_cli_writes_json_when_available(tmp_path: Path) -> None:
@@ -615,6 +623,8 @@ def test_sweep_cli_writes_json_when_available(tmp_path: Path) -> None:
         "quoted",
         "--family",
         "uppercase",
+        "--repeats",
+        "2",
         "--json",
         str(out_path),
     )
@@ -626,6 +636,7 @@ def test_sweep_cli_writes_json_when_available(tmp_path: Path) -> None:
     assert "combined_score" in serialized
     assert "quoted" in serialized
     assert "uppercase" in serialized
+    assert payload["sampling"]["chat_repeats"] == 2
 
 
 def test_minimize_cli_writes_json_when_available(tmp_path: Path) -> None:
@@ -651,6 +662,8 @@ def test_minimize_cli_writes_json_when_available(tmp_path: Path) -> None:
         "demo-model",
         "--metric",
         "chat",
+        "--repeats",
+        "2",
         "--json",
         str(out_path),
     )
@@ -659,6 +672,7 @@ def test_minimize_cli_writes_json_when_available(tmp_path: Path) -> None:
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["minimized_token_count"] <= payload["original_token_count"]
     assert payload["final_score"] > 0.0
+    assert payload["sampling"]["chat_repeats"] == 2
 
 
 def test_attack_cli_writes_json_when_available(tmp_path: Path) -> None:
@@ -675,6 +689,8 @@ def test_attack_cli_writes_json_when_available(tmp_path: Path) -> None:
         str(provider),
         "--provider-config",
         str(FIXTURES / "trigger_provider_config.json"),
+        "--repeats",
+        "2",
         str(campaign),
         "--json",
         str(out_path),
@@ -684,5 +700,6 @@ def test_attack_cli_writes_json_when_available(tmp_path: Path) -> None:
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["top_candidates"]
     assert payload["minimizations"]
+    assert payload["campaign"]["chat_repeats"] == 2
     serialized = json.dumps(payload)
     assert "mixed_family" in serialized or "single_family" in serialized

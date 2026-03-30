@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import Counter
 import difflib
 import importlib
 import importlib.util
@@ -107,23 +108,27 @@ def describe_provider(provider: Any) -> dict[str, Any]:
     return {"provider_type": type(provider).__name__}
 
 
-def chat_diff(provider: Any, lhs_case: dict[str, Any], rhs_case: dict[str, Any], model: str) -> dict[str, Any]:
+def chat_diff(provider: Any, lhs_case: dict[str, Any], rhs_case: dict[str, Any], model: str, *, repeats: int = 1) -> dict[str, Any]:
     lhs = normalize_case(lhs_case, default_id="lhs")
     rhs = normalize_case(rhs_case, default_id="rhs")
-    raw_results = _provider_call(provider.chat_completions([lhs, rhs], model=model))
-    if not isinstance(raw_results, list) or len(raw_results) != 2:
-        raise ValueError("Provider chat_completions() must return a list of two results")
-    lhs_result = _normalize_chat_result(raw_results[0], lhs["custom_id"])
-    rhs_result = _normalize_chat_result(raw_results[1], rhs["custom_id"])
+    lhs_result = _aggregate_chat_samples(
+        _collect_chat_samples(provider, lhs, model=model, repeats=repeats, namespace="lhs"),
+        lhs["custom_id"],
+    )
+    rhs_result = _aggregate_chat_samples(
+        _collect_chat_samples(provider, rhs, model=model, repeats=repeats, namespace="rhs"),
+        rhs["custom_id"],
+    )
     return {
         "mode": "chat",
         "model": model,
+        "sampling": {"chat_repeats": int(repeats)},
         "provider": describe_provider(provider),
         "lhs_case": lhs,
         "rhs_case": rhs,
         "lhs": lhs_result,
         "rhs": rhs_result,
-        "compare": _text_compare(lhs_result["text"], rhs_result["text"]),
+        "compare": _compare_chat_sample_sets(lhs_result, rhs_result),
     }
 
 
@@ -148,7 +153,7 @@ def activation_diff(provider: Any, lhs_case: dict[str, Any], rhs_case: dict[str,
     }
 
 
-def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) -> dict[str, Any]:
+def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str], *, repeats: int = 1) -> dict[str, Any]:
     normalized = normalize_case(case, default_id="case")
     unique_models = list(dict.fromkeys(models))
     if len(unique_models) < 2:
@@ -158,10 +163,10 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
     activation_rows: dict[str, dict[str, np.ndarray]] = {}
     activation_missing_models: list[str] = []
     for model in unique_models:
-        raw_chat = _provider_call(provider.chat_completions([normalized], model=model))
-        if not isinstance(raw_chat, list) or len(raw_chat) != 1:
-            raise ValueError("Provider chat_completions() must return one result per requested case")
-        chat_rows[model] = _normalize_chat_result(raw_chat[0], normalized["custom_id"])
+        chat_rows[model] = _aggregate_chat_samples(
+            _collect_chat_samples(provider, normalized, model=model, repeats=repeats),
+            normalized["custom_id"],
+        )
 
         if normalized["module_names"]:
             raw_acts = _provider_call(provider.activations([normalized], model=model))
@@ -181,7 +186,7 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
             {
                 "lhs_model": lhs_model,
                 "rhs_model": rhs_model,
-                "compare": _text_compare(chat_rows[lhs_model]["text"], chat_rows[rhs_model]["text"]),
+                "compare": _compare_chat_sample_sets(chat_rows[lhs_model], chat_rows[rhs_model]),
             }
         )
         if activation_rows:
@@ -198,8 +203,9 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
         "provider": describe_provider(provider),
         "case": normalized,
         "models": unique_models,
+        "sampling": {"chat_repeats": int(repeats), "activation_repeats": 1},
         "chat": {
-            "results": {model: {"text": row["text"], "char_count": row["char_count"]} for model, row in chat_rows.items()},
+            "results": chat_rows,
             "pairwise": pairwise_chat,
         },
     }
@@ -272,6 +278,7 @@ def sweep_variants(
     *,
     models: list[str],
     families: list[str] | tuple[str, ...] | None = None,
+    chat_repeats: int = 1,
 ) -> dict[str, Any]:
     normalized = normalize_case(case, default_id="case")
     variants = mutate_case(normalized, families=families)["variants"]
@@ -279,8 +286,8 @@ def sweep_variants(
     for variant in variants:
         per_model: list[dict[str, Any]] = []
         for model in list(dict.fromkeys(models)):
-            chat = chat_diff(provider, normalized, variant["case"], model)
-            chat_score = 0.0 if chat["compare"]["exact_match"] else (1.0 - float(chat["compare"]["char_similarity"]))
+            chat = chat_diff(provider, normalized, variant["case"], model, repeats=chat_repeats)
+            chat_score = _chat_change_score(chat["compare"])
             activation_score = 0.0
             activation = None
             if normalized["module_names"]:
@@ -315,6 +322,7 @@ def sweep_variants(
         "base_case": normalized,
         "models": list(dict.fromkeys(models)),
         "families": list(families or MUTATION_FAMILIES),
+        "sampling": {"chat_repeats": int(chat_repeats)},
         "variant_count": len(rows),
         "variants": rows,
     }
@@ -329,6 +337,7 @@ def minimize_trigger(
     metric: str = "chat",
     threshold: float | None = None,
     unit: str = "token",
+    chat_repeats: int = 1,
 ) -> dict[str, Any]:
     control = normalize_case(control_case, default_id="control")
     candidate = normalize_case(candidate_case, default_id="candidate")
@@ -344,7 +353,7 @@ def minimize_trigger(
         raise ValueError("Candidate message contents are empty")
     changed = True
     iterations = 0
-    baseline_score = _trigger_score(provider, control, candidate, model=model, metric=metric)
+    baseline_score = _trigger_score(provider, control, candidate, model=model, metric=metric, chat_repeats=chat_repeats)
     final_score = baseline_score
     while changed and sum(len(parts) for parts in working) > 1:
         changed = False
@@ -362,7 +371,14 @@ def minimize_trigger(
                     [_join_units(row, unit) for row in trial_working],
                     suffix=f"trial-{iterations}-{msg_index}-{part_index}",
                 )
-                score = _trigger_score(provider, control, trial_case, model=model, metric=metric)
+                score = _trigger_score(
+                    provider,
+                    control,
+                    trial_case,
+                    model=model,
+                    metric=metric,
+                    chat_repeats=chat_repeats,
+                )
                 if score > float(threshold):
                     working = trial_working
                     final_score = score
@@ -381,6 +397,7 @@ def minimize_trigger(
         "model": model,
         "metric": metric,
         "unit": unit,
+        "sampling": {"chat_repeats": int(chat_repeats)},
         "threshold": float(threshold),
         "control_case": control,
         "original_candidate_case": candidate,
@@ -430,6 +447,124 @@ def _normalize_chat_result(result: Any, default_id: str) -> dict[str, Any]:
         "text": text,
         "char_count": len(text),
         "preview": text[:200],
+    }
+
+
+def _collect_chat_samples(
+    provider: Any,
+    case: dict[str, Any],
+    *,
+    model: str,
+    repeats: int,
+    namespace: str | None = None,
+) -> list[dict[str, Any]]:
+    repeats = int(repeats)
+    if repeats < 1:
+        raise ValueError("repeats must be at least 1")
+    requests = [_repeat_case(case, repeat_index=index, namespace=namespace) for index in range(repeats)]
+    raw_results = _provider_call(provider.chat_completions(requests, model=model))
+    if not isinstance(raw_results, list) or len(raw_results) != repeats:
+        raise ValueError("Provider chat_completions() must return one result per requested repeated case")
+    normalized = [
+        _normalize_chat_result(raw_results[index], requests[index]["custom_id"])
+        for index in range(repeats)
+    ]
+    normalized_by_id = {row["custom_id"]: row for row in normalized if isinstance(row.get("custom_id"), str)}
+    if len(normalized_by_id) == repeats and set(normalized_by_id) == {row["custom_id"] for row in requests}:
+        ordered = [normalized_by_id[row["custom_id"]] for row in requests]
+    else:
+        ordered = normalized
+    for index, row in enumerate(ordered):
+        row["repeat_index"] = index
+    return ordered
+
+
+def _aggregate_chat_samples(samples: list[dict[str, Any]], base_id: str) -> dict[str, Any]:
+    if not samples:
+        raise ValueError("samples must not be empty")
+    texts = [str(row["text"]) for row in samples]
+    text_counts = Counter(texts)
+    mean_similarity_by_index = [1.0] * len(samples)
+    pairwise_similarities: list[float] = []
+    if len(samples) > 1:
+        totals = [0.0] * len(samples)
+        counts = [0] * len(samples)
+        for lhs_index in range(len(samples)):
+            for rhs_index in range(lhs_index + 1, len(samples)):
+                similarity = float(_text_compare(texts[lhs_index], texts[rhs_index])["char_similarity"])
+                pairwise_similarities.append(similarity)
+                totals[lhs_index] += similarity
+                totals[rhs_index] += similarity
+                counts[lhs_index] += 1
+                counts[rhs_index] += 1
+        mean_similarity_by_index = [
+            (totals[index] / counts[index]) if counts[index] else 1.0
+            for index in range(len(samples))
+        ]
+    representative_index = max(
+        range(len(samples)),
+        key=lambda index: (text_counts[texts[index]], mean_similarity_by_index[index], -index),
+    )
+    representative = dict(samples[representative_index])
+    pair_count = len(pairwise_similarities)
+    stability = {
+        "pair_count": pair_count,
+        "mean_char_similarity": float(np.mean(pairwise_similarities)) if pairwise_similarities else 1.0,
+        "min_char_similarity": float(np.min(pairwise_similarities)) if pairwise_similarities else 1.0,
+        "max_char_similarity": float(np.max(pairwise_similarities)) if pairwise_similarities else 1.0,
+    }
+    unique_previews = [
+        {"count": int(count), "char_count": len(text), "preview": text[:200]}
+        for text, count in text_counts.most_common(5)
+    ]
+    return {
+        "custom_id": base_id,
+        "text": representative["text"],
+        "char_count": representative["char_count"],
+        "preview": representative["preview"],
+        "representative_sample_index": int(representative_index),
+        "sample_count": int(len(samples)),
+        "unique_text_count": int(len(text_counts)),
+        "exact_consensus": len(text_counts) == 1,
+        "unique_previews": unique_previews,
+        "stability": stability,
+        "samples": [dict(row) for row in samples],
+    }
+
+
+def _compare_chat_sample_sets(lhs: dict[str, Any], rhs: dict[str, Any]) -> dict[str, Any]:
+    representative = _text_compare(lhs["text"], rhs["text"])
+    lhs_texts = [str(row["text"]) for row in lhs.get("samples", [])] or [str(lhs["text"])]
+    rhs_texts = [str(row["text"]) for row in rhs.get("samples", [])] or [str(rhs["text"])]
+    cross_similarities: list[float] = []
+    exact_pair_count = 0
+    for lhs_text in lhs_texts:
+        for rhs_text in rhs_texts:
+            compare = _text_compare(lhs_text, rhs_text)
+            cross_similarities.append(float(compare["char_similarity"]))
+            if compare["exact_match"]:
+                exact_pair_count += 1
+    lhs_within = float(lhs.get("stability", {}).get("mean_char_similarity", 1.0))
+    rhs_within = float(rhs.get("stability", {}).get("mean_char_similarity", 1.0))
+    expected_self = float(np.mean([lhs_within, rhs_within]))
+    cross_mean = float(np.mean(cross_similarities)) if cross_similarities else float(representative["char_similarity"])
+    representative_separation = 0.0 if representative["exact_match"] else (1.0 - float(representative["char_similarity"]))
+    separation_gap = max(expected_self - cross_mean, 0.0)
+    score = max(representative_separation, separation_gap)
+    return {
+        **representative,
+        "representative_compare": representative,
+        "cross_pair_count": int(len(cross_similarities)),
+        "exact_pair_count": int(exact_pair_count),
+        "cross_mean_char_similarity": cross_mean,
+        "cross_min_char_similarity": float(np.min(cross_similarities)) if cross_similarities else cross_mean,
+        "cross_max_char_similarity": float(np.max(cross_similarities)) if cross_similarities else cross_mean,
+        "lhs_within_mean_char_similarity": lhs_within,
+        "rhs_within_mean_char_similarity": rhs_within,
+        "expected_self_mean_char_similarity": expected_self,
+        "representative_separation": representative_separation,
+        "separation_gap": separation_gap,
+        "score": float(score),
     }
 
 
@@ -688,6 +823,12 @@ def _activation_change_score(result: dict[str, Any]) -> float:
     return float(max(float(row.get("max_abs", 0.0)) for row in modules))
 
 
+def _chat_change_score(compare: dict[str, Any]) -> float:
+    if "score" in compare:
+        return float(compare["score"])
+    return 0.0 if compare.get("exact_match") else float(1.0 - float(compare.get("char_similarity", 0.0)))
+
+
 def _trigger_score(
     provider: Any,
     control_case: dict[str, Any],
@@ -695,12 +836,29 @@ def _trigger_score(
     *,
     model: str,
     metric: str,
+    chat_repeats: int = 1,
 ) -> float:
     if metric == "chat":
-        row = chat_diff(provider, control_case, candidate_case, model)
-        return 0.0 if row["compare"]["exact_match"] else float(1.0 - row["compare"]["char_similarity"])
+        row = chat_diff(provider, control_case, candidate_case, model, repeats=chat_repeats)
+        return _chat_change_score(row["compare"])
     row = activation_diff(provider, control_case, candidate_case, model)
     return _activation_change_score(row)
+
+
+def _repeat_case(case: dict[str, Any], *, repeat_index: int, namespace: str | None = None) -> dict[str, Any]:
+    metadata = dict(case.get("metadata", {}))
+    metadata["repeat_index"] = int(repeat_index)
+    if namespace:
+        metadata["repeat_namespace"] = str(namespace)
+    custom_id = case["custom_id"]
+    if namespace:
+        custom_id = f"{custom_id}::{namespace}"
+    return {
+        "custom_id": f"{custom_id}::repeat-{repeat_index}",
+        "messages": [dict(row) for row in case["messages"]],
+        "module_names": list(case["module_names"]),
+        "metadata": metadata,
+    }
 
 
 def _split_units(text: str, unit: str) -> list[str]:

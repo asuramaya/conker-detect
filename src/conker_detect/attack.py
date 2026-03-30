@@ -66,6 +66,9 @@ def normalize_campaign(campaign: dict[str, Any]) -> dict[str, Any]:
     model = minimize.get("model")
     if model is not None and not isinstance(model, str):
         raise ValueError("minimize.model must be a string when present")
+    chat_repeats = int(campaign.get("chat_repeats", 1))
+    if chat_repeats < 1:
+        raise ValueError("chat_repeats must be at least 1")
     return {
         "name": str(campaign.get("name", "campaign")),
         "models": list(dict.fromkeys(models)),
@@ -73,6 +76,7 @@ def normalize_campaign(campaign: dict[str, Any]) -> dict[str, Any]:
         "families": families,
         "mix_depth": mix_depth,
         "top_k": top_k,
+        "chat_repeats": chat_repeats,
         "minimize": {"metric": metric, "unit": unit, "threshold": threshold, "model": model},
     }
 
@@ -83,8 +87,14 @@ def run_attack_campaign(provider: Any, campaign: dict[str, Any]) -> dict[str, An
     mixed_reports: list[dict[str, Any]] = []
 
     for case in normalized["cases"]:
-        crossmodel = cross_model_compare(provider, case, normalized["models"])
-        sweep = sweep_variants(provider, case, models=normalized["models"], families=normalized["families"] or None)
+        crossmodel = cross_model_compare(provider, case, normalized["models"], repeats=normalized["chat_repeats"])
+        sweep = sweep_variants(
+            provider,
+            case,
+            models=normalized["models"],
+            families=normalized["families"] or None,
+            chat_repeats=normalized["chat_repeats"],
+        )
         top_variants = sweep["variants"][: normalized["top_k"]]
         case_reports.append(
             {
@@ -103,6 +113,7 @@ def run_attack_campaign(provider: Any, campaign: dict[str, Any]) -> dict[str, An
             models=normalized["models"],
             families=family_names,
             mix_depth=normalized["mix_depth"],
+            chat_repeats=normalized["chat_repeats"],
         )
         mixed_reports.extend(combo_rows)
 
@@ -120,6 +131,7 @@ def run_attack_campaign(provider: Any, campaign: dict[str, Any]) -> dict[str, An
                 metric=minimize_cfg["metric"],
                 unit=minimize_cfg["unit"],
                 threshold=minimize_cfg["threshold"],
+                chat_repeats=normalized["chat_repeats"],
             )
         )
 
@@ -133,6 +145,7 @@ def run_attack_campaign(provider: Any, campaign: dict[str, Any]) -> dict[str, An
             "case_count": len(normalized["cases"]),
             "mix_depth": normalized["mix_depth"],
             "top_k": normalized["top_k"],
+            "chat_repeats": normalized["chat_repeats"],
         },
         "cases": case_reports,
         "mixed_candidates": mixed_reports,
@@ -148,6 +161,7 @@ def _mix_top_families(
     models: list[str],
     families: list[str],
     mix_depth: int,
+    chat_repeats: int,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     unique = list(dict.fromkeys(name for name in families if name))
@@ -158,8 +172,8 @@ def _mix_top_families(
             composed = compose_case_mutations(case, family_combo)
             per_model: list[dict[str, Any]] = []
             for model in models:
-                chat = chat_diff(provider, case, composed["case"], model)
-                chat_score = 0.0 if chat["compare"]["exact_match"] else (1.0 - float(chat["compare"]["char_similarity"]))
+                chat = chat_diff(provider, case, composed["case"], model, repeats=chat_repeats)
+                chat_score = float(chat["compare"].get("score", 0.0))
                 activation_score = 0.0
                 activation = None
                 if case["module_names"]:
@@ -196,7 +210,7 @@ def _rank_candidates(case_reports: list[dict[str, Any]], mixed_reports: list[dic
     rows: list[dict[str, Any]] = []
     for report in case_reports:
         pairwise = report["crossmodel"]["chat"]["pairwise"]
-        crossmodel_score = float(max((1.0 - row["compare"]["char_similarity"] for row in pairwise), default=0.0))
+        crossmodel_score = float(max((row["compare"].get("score", 0.0) for row in pairwise), default=0.0))
         for variant in report["sweep"]["variants"]:
             rows.append(
                 {
