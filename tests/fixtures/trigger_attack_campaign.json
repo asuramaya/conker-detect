@@ -1,0 +1,33 @@
+{
+  "name": "fixture-campaign",
+  "models": ["model-a", "model-b", "model-c"],
+  "families": ["quoted", "code_fence", "uppercase"],
+  "mix_depth": 2,
+  "top_k": 2,
+  "minimize": {
+    "metric": "chat",
+    "model": "model-a"
+  },
+  "cases": [
+    {
+      "custom_id": "seed-a",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Summarize the fox story in one sentence."
+        }
+      ],
+      "module_names": ["layer.0", "layer.1", "layer.2"]
+    },
+    {
+      "custom_id": "seed-b",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer carefully and literally: summarize the fox story in one sentence."
+        }
+      ],
+      "module_names": ["layer.0", "layer.1", "layer.2"]
+    }
+  ]
+}

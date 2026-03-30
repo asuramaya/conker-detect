@@ -659,3 +659,30 @@ def test_minimize_cli_writes_json_when_available(tmp_path: Path) -> None:
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["minimized_token_count"] <= payload["original_token_count"]
     assert payload["final_score"] > 0.0
+
+
+def test_attack_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("attack"):
+        pytest.skip("trigger attack CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    campaign = FIXTURES / "trigger_attack_campaign.json"
+    out_path = tmp_path / "attack.json"
+
+    result = _run_cli(
+        "attack",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        str(FIXTURES / "trigger_provider_config.json"),
+        str(campaign),
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["top_candidates"]
+    assert payload["minimizations"]
+    serialized = json.dumps(payload)
+    assert "mixed_family" in serialized or "single_family" in serialized

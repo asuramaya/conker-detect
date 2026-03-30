@@ -304,6 +304,7 @@ These commands are for regime-switch hunting, not legality:
 - `mutate`: generate structured prompt variants for search
 - `sweep`: score those variants against a base case across one or more models
 - `minimize`: greedily shrink a candidate trigger while preserving a chosen difference metric
+- `attack`: run a full ranked campaign over seed prompts, single-family mutations, mixed mutations, and minimization
 
 The bundled `jsinfer` provider caches normalized API responses on disk so repeated prompt sweeps do not burn quota unnecessarily.
 
@@ -326,7 +327,19 @@ conker-detect minimize \
   --candidate cases/candidate.json \
   --model dormant-model-1 \
   --metric chat
+
+conker-detect attack \
+  --provider conker_detect.providers.jsinfer_provider \
+  --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  examples/dormant_attack_campaign.json
 ```
+
+The one-shot `attack` command ranks:
+
+- cross-model divergent seed prompts
+- best single-family mutations
+- mixed top-family candidates
+- minimized candidates for the highest-ranked hits
 
 ### Audit a packed artifact
 

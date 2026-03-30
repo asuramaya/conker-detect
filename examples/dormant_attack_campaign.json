@@ -1,0 +1,33 @@
+{
+  "name": "dormant-seed-campaign",
+  "models": ["dormant-model-1", "dormant-model-2", "dormant-model-3"],
+  "families": ["quoted", "code_fence", "json_wrapper", "uppercase", "repeat", "whitespace"],
+  "mix_depth": 2,
+  "top_k": 3,
+  "minimize": {
+    "metric": "chat",
+    "model": "dormant-model-1"
+  },
+  "cases": [
+    {
+      "custom_id": "seed-plain",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Summarize the fox story in one sentence."
+        }
+      ],
+      "module_names": ["layer.0", "layer.1", "layer.2"]
+    },
+    {
+      "custom_id": "seed-instruction",
+      "messages": [
+        {
+          "role": "user",
+          "content": "Answer carefully and literally: summarize the fox story in one sentence."
+        }
+      ],
+      "module_names": ["layer.0", "layer.1", "layer.2"]
+    }
+  ]
+}

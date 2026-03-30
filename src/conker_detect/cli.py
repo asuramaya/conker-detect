@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+from .attack import load_campaign, run_attack_campaign
 from .audit import (
     audit_artifact,
     audit_bundle,
@@ -225,6 +226,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_minimize.add_argument("--metric", choices=["chat", "activation"], default="chat")
     p_minimize.add_argument("--threshold", type=float)
     p_minimize.add_argument("--json")
+
+    p_attack = sub.add_parser("attack", help="Run a ranked trigger-hunting campaign against a provider")
+    p_attack.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_attack.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_attack.add_argument("campaign", help="JSON campaign file defining models, cases, and mutation families")
+    p_attack.add_argument("--json")
 
     p_legality = sub.add_parser("legality", help="Behavioral legality audit via adapter-backed runtime probes")
     p_legality.add_argument("--adapter", required=True, help="Python adapter module or .py file exporting build_adapter(config)")
@@ -465,6 +472,12 @@ def main() -> None:
             metric=args.metric,
             threshold=args.threshold,
         )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "attack":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = run_attack_campaign(provider, load_campaign(args.campaign))
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

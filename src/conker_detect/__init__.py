@@ -1,5 +1,6 @@
 """Conker detect."""
 
+from .attack import load_campaign, normalize_campaign, run_attack_campaign
 from .audit import (
     audit_artifact,
     audit_bundle,
@@ -43,6 +44,7 @@ __all__ = [
     "audit_bundle",
     "audit_matrix",
     "activation_diff",
+    "load_campaign",
     "audit_legality",
     "audit_parameter_golf_legality",
     "audit_provenance",
@@ -66,6 +68,7 @@ __all__ = [
     "load_token_array",
     "load_tensor_bundle",
     "mask_geometry_stats",
+    "normalize_campaign",
     "minimize_trigger",
     "mutate_case",
     "normalize_case",
@@ -74,6 +77,7 @@ __all__ = [
     "replay_runtime",
     "region_stats",
     "spectral_stats",
+    "run_attack_campaign",
     "sweep_variants",
     "write_ledger_bundle_manifest",
 ]

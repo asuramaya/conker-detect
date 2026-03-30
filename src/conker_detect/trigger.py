@@ -236,6 +236,26 @@ def mutate_case(case: dict[str, Any], families: list[str] | tuple[str, ...] | No
     }
 
 
+def compose_case_mutations(case: dict[str, Any], families: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    normalized = normalize_case(case, default_id="case")
+    if not families:
+        raise ValueError("compose_case_mutations requires at least one family")
+    unknown = [name for name in families if name not in MUTATION_FAMILIES]
+    if unknown:
+        raise ValueError(f"Unknown mutation families: {', '.join(sorted(unknown))}")
+    text = normalized["messages"][-1]["content"]
+    for family in families:
+        text = _apply_mutation(text, family)
+    suffix = "+".join(families)
+    composed = _replace_last_message_content(normalized, text, suffix=suffix)
+    return {
+        "variant_id": composed["custom_id"],
+        "families": list(families),
+        "description": " then ".join(_mutation_description(name) for name in families),
+        "case": composed,
+    }
+
+
 def sweep_variants(
     provider: Any,
     case: dict[str, Any],
