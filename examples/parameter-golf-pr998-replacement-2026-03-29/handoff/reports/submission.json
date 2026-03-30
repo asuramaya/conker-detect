@@ -1,0 +1,78 @@
+{
+  "profile": "parameter-golf",
+  "verdict": "pass",
+  "submission": {
+    "repo_root": "/Users/asuramaya/Code/carving_machine_v3/conker",
+    "submission_root": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/source_submission",
+    "track": null,
+    "name": "Conker-11 legal replacement evidence for PR #998"
+  },
+  "extracted_claims": {
+    "submission_json": {
+      "name": "Conker-11 legal replacement evidence for PR #998",
+      "track": "track_non_record_16mb",
+      "pre_quant_val_bpb": 2.0124189795892984
+    },
+    "results_json": {
+      "pre_quant_val_bpb": 2.0124189795892984
+    },
+    "readme": {
+      "name": "Conker-11 legal replacement evidence for PR #998"
+    },
+    "logs": {
+      "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/source_submission/train.log": {
+        "path": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/source_submission/train.log"
+      }
+    },
+    "artifact_files": {
+      "/Users/asuramaya/Code/carving_machine_v3/conker/conker/out/conker11_seed43_replacement_2026-03-29.npz": {
+        "bytes": 709480922,
+        "suffix": ".npz",
+        "looks_like_artifact": true
+      }
+    },
+    "code_files": [
+      "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/source_submission/train_gpt.py"
+    ],
+    "patch": null
+  },
+  "checks": {
+    "presence": {
+      "pass": true,
+      "checked_count": 2,
+      "finding_count": 0
+    },
+    "claim_consistency": {
+      "pass": true,
+      "finding_count": 0
+    },
+    "artifact_bytes": {
+      "pass": true,
+      "artifact_count": 1,
+      "finding_count": 0
+    },
+    "protocol_shape": {
+      "pass": true,
+      "scanned_count": 1,
+      "finding_count": 0
+    },
+    "data_boundary_signals": {
+      "pass": true,
+      "scanned_count": 1,
+      "finding_count": 0
+    },
+    "reproducibility_surface": {
+      "pass": true,
+      "has_log": true,
+      "has_code": true,
+      "has_artifact": true,
+      "finding_count": 0
+    },
+    "patch_triage": {
+      "pass": null,
+      "present": false
+    }
+  },
+  "findings": [],
+  "alerts": []
+}

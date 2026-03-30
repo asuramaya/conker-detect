@@ -1,0 +1,10 @@
+conker-11 golf bridge
+data_root=/Users/asuramaya/Code/carving_machine_v3/chronohorn/data/roots/fineweb10B_sp1024
+seed=43 steps=1000 seq_len=256 batch_size=16 lr=0.001
+variant=window4 scale=10.000 freeze_base=False lag_lookbacks=(2,4,8,16,32,64,128,0) lag_temp=1.00 global_lag_cap=0.50
+final_test_eval_loss=3.397885355949402
+final_test_bits_per_token=4.902112352537433
+final_test_bpb=2.0124189795892984
+saved_json=conker11_seed43_replacement_2026-03-29.json
+saved_state=conker11_seed43_replacement_2026-03-29.npz
+

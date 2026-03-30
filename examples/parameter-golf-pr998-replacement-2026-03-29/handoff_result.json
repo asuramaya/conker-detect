@@ -1,0 +1,31 @@
+{
+  "bundle_id": "parameter-golf-pr998-replacement-2026-03-29",
+  "run_dir": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/source_submission",
+  "out_dir": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff",
+  "reports": {
+    "submission": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/reports/submission.json",
+    "provenance": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/reports/provenance.json"
+  },
+  "claim": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/claim.json",
+  "metrics": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/metrics.json",
+  "provenance": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/provenance.json",
+  "audits": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/audits.json",
+  "ledger_manifest": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/handoff/ledger_manifest.json",
+  "manifest": {
+    "bundle_id": "parameter-golf-pr998-replacement-2026-03-29",
+    "attachments": [
+      {
+        "source": "reports/submission.json",
+        "dest": "audits/tier1/submission.json"
+      },
+      {
+        "source": "reports/provenance.json",
+        "dest": "audits/tier1/provenance.json"
+      }
+    ],
+    "claim": "claim.json",
+    "metrics": "metrics.json",
+    "provenance": "provenance.json",
+    "audits": "audits.json"
+  }
+}

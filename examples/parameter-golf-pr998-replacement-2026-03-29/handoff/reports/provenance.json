@@ -1,0 +1,45 @@
+{
+  "profile": "parameter-golf",
+  "verdict": "warn",
+  "provenance": {
+    "submitted_run_id": "conker11_seed43_replacement_2026-03-29",
+    "selection_mode": "best_of_k",
+    "candidate_run_count": 2,
+    "dataset_keys": [
+      "held_out_test",
+      "train",
+      "validation"
+    ]
+  },
+  "checks": {
+    "selection_disclosure": {
+      "pass": true,
+      "selection_mode": "best_of_k",
+      "candidate_run_count": 2,
+      "finding_count": 1
+    },
+    "dataset_fingerprints": {
+      "pass": true,
+      "dataset_count": 3,
+      "finding_count": 0
+    },
+    "held_out_identity": {
+      "pass": true,
+      "held_out_name": "openai_parameter_golf_internal_heldout",
+      "finding_count": 0
+    }
+  },
+  "findings": [
+    {
+      "severity": "warn",
+      "kind": "selection_bias_risk",
+      "message": "best_of_k selection was disclosed; reported metrics may be optimistic without an unseen test set",
+      "details": {
+        "candidate_run_count": 2
+      }
+    }
+  ],
+  "alerts": [
+    "best_of_k selection was disclosed; reported metrics may be optimistic without an unseen test set"
+  ]
+}

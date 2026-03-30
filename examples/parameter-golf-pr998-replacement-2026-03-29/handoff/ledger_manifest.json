@@ -1,0 +1,29 @@
+{
+  "bundle_id": "parameter-golf-pr998-replacement-2026-03-29",
+  "attachments": [
+    {
+      "source": "reports/submission.json",
+      "dest": "audits/tier1/submission.json"
+    },
+    {
+      "source": "reports/provenance.json",
+      "dest": "audits/tier1/provenance.json"
+    },
+    {
+      "source": "../../conker11_pr998_replacement_causal_matrix_2026-03-29.json",
+      "dest": "audits/tier2/causal_mask_matrix.json"
+    },
+    {
+      "source": "../../conker11_pr998_replacement_causal_geometry_2026-03-29.json",
+      "dest": "audits/tier2/causal_mask_geometry.json"
+    },
+    {
+      "source": "../pr998_update.md",
+      "dest": "artifacts/pr998_update.md"
+    }
+  ],
+  "claim": "claim.json",
+  "metrics": "metrics.json",
+  "provenance": "provenance.json",
+  "audits": "audits.json"
+}

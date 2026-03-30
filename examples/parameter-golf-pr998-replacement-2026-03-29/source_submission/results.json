@@ -1,0 +1,15 @@
+{
+  "run_id": "conker11_seed43_replacement_2026-03-29",
+  "pre_quant_val_bpb": 2.0124189795892984,
+  "test_bits_per_token": 4.902112352537433,
+  "test_eval_loss": 3.397885355949402,
+  "train_time_sec": 157.92236804962158,
+  "seed": 43,
+  "steps": 1000,
+  "seq_len": 256,
+  "batch_size": 16,
+  "global_lag_cap": 0.5,
+  "checkpoint_format": "raw_npz_replay_checkpoint",
+  "checkpoint_bytes_raw_npz": 709480922
+}
+

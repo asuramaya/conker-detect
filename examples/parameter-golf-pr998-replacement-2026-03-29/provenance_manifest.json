@@ -1,0 +1,23 @@
+{
+  "profile": "parameter-golf",
+  "selection": {
+    "submitted_run_id": "conker11_seed43_replacement_2026-03-29",
+    "selection_mode": "best_of_k",
+    "candidate_run_count": 2
+  },
+  "datasets": {
+    "train": {
+      "name": "fineweb_train_sp1024_glob",
+      "fingerprint": "chronohorn:fineweb10B_sp1024:train"
+    },
+    "validation": {
+      "name": "fineweb_val_sp1024_glob",
+      "fingerprint": "chronohorn:fineweb10B_sp1024:val"
+    },
+    "held_out_test": {
+      "name": "openai_parameter_golf_internal_heldout",
+      "fingerprint": "undisclosed_to_submitter"
+    }
+  }
+}
+

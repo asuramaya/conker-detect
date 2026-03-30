@@ -1,0 +1,10 @@
+{
+  "run_id": "source_submission",
+  "source_root": "/Users/asuramaya/Code/carving_machine_v3/conker-detect/examples/parameter-golf-pr998-replacement-2026-03-29/source_submission",
+  "source_repo": "https://github.com/asuramaya/conker",
+  "source_commit": "c278523d8ea5a2dcb4e342d5c428ac389a50af6d",
+  "submission_pr": "https://github.com/openai/parameter-golf/pull/998",
+  "submitted_run_id": "conker11_seed43_replacement_2026-03-29",
+  "selection_mode": "best_of_k",
+  "candidate_run_count": 2
+}

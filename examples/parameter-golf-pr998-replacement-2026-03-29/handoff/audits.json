@@ -1,0 +1,17 @@
+{
+  "tier1": {
+    "status": "warn",
+    "submission": "pass",
+    "provenance": "warn"
+  },
+  "tier2": {
+    "status": "warn",
+    "summary": "Targeted structural audit attached for the extracted Conker-11 causal mask. The mask itself is perfectly strict-lower with zero upper/diagonal mass, but this packet does not include a full packed-artifact audit.",
+    "causal_mask_matrix": "pass",
+    "causal_mask_geometry": "pass"
+  },
+  "tier3": {
+    "status": "missing",
+    "summary": "No live runtime legality adapter is attached in this public same-PR update packet."
+  }
+}
