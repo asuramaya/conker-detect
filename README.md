@@ -28,45 +28,51 @@ This tool packages both.
 
 3. `bundle`
 - inspect all 2D tensors in an `.npz` checkpoint bundle, a single `.safetensors` file, or a local Hugging Face safetensors repo
+- tolerate `BF16` and `F8_E4M3` safetensors payloads through a PyTorch fallback when NumPy cannot decode them directly
 - report per-tensor spectral and structural metrics
 - optionally flag tensors that are expected to be strict-lower causal
 - useful for telling raw replay checkpoints apart from packed submission payloads
 
-4. `compare`
+4. `carve`
+- carve fully available tensors out of a safetensors file or a byte-range shard slice
+- write a smaller standalone `.safetensors` bundle that `bundle` and `compare` can inspect normally
+- useful for probing giant Hugging Face shards without mirroring the whole file
+
+5. `compare`
 - compare matching 2D tensors across two tensor bundles
 - useful for poisoned-vs-clean or trained-vs-reference analysis
 
-5. `artifact`
+6. `artifact`
 - inspect a packed `.ptz` artifact
 - classify payload entries as deterministic substrate, structural control, or learned payload
 - surface raw-vs-compressed byte stories and suspicious packed names directly
 
-6. `submission`
+7. `submission`
 - audit a submission manifest and its attached evidence
 - check claim consistency across `README.md`, `submission.json`, logs, artifacts, and patch context
 - emit Tier 1 findings without pretending to prove runtime legality
 
-7. `provenance`
+8. `provenance`
 - audit selection disclosure and dataset fingerprints from a provenance manifest
 - surface best-of-`k` selection risk and missing held-out identity explicitly
 
-8. `legality`
+9. `legality`
 - run behavioral legality probes against a live submission adapter
 - check score-phase repeatability and causal invariance
 - grade the adapter surface at `basic`, `traced`, or `strict` trust levels
 - support challenge-specific profiles such as score-first `parameter-golf` TTT
 
-9. `replay`
+10. `replay`
 - run finalist-strength chunked replay against a live submission adapter
 - compute aggregate loss / bpb summaries and stronger repeated-run drift statistics
 - keep this distinct from narrow legality probes
 
-10. `handoff`
+11. `handoff`
 - generate Tier 1 detector reports and optional runtime reports from one run directory
 - synthesize `claim.json`, `metrics.json`, `provenance.json`, and `audits.json`
 - write a ready-to-edit `conker-ledger` manifest in the same output directory
 
-11. `ledger-manifest`
+12. `ledger-manifest`
 - write a ready-to-edit `conker-ledger` bundle manifest from detector outputs
 - prewire `submission`, `provenance`, `legality`, and `replay` attachments into the expected bundle paths
 
@@ -173,6 +179,7 @@ conker-detect bundle model.npz --expect-causal mask --expect-causal causal
 This mode also works on a single `.safetensors` file or a local Hugging Face safetensors repo directory.
 That makes it usable as a probe over exported HF weights without first repackaging the whole model.
 For very large sharded repos, pass `--name-regex` so you only load the tensor families you actually want to inspect.
+If NumPy does not understand a safetensors dtype such as `BF16` or `F8_E4M3`, `conker-detect` falls back to PyTorch decoding when it is installed.
 
 Examples:
 
@@ -188,6 +195,15 @@ Only square tensors:
 ```bash
 conker-detect bundle model.npz --only-square
 ```
+
+### Carve a partial safetensors slice
+
+```bash
+conker-detect carve shard-head.bin shard-mini.safetensors --name-regex 'model\\.layers\\.10\\.'
+conker-detect bundle shard-mini.safetensors --name-regex 'weight_scale_inv$'
+```
+
+This is the intended workflow for very large Hugging Face models when you only have a ranged download of the front of one shard.
 
 ### Compare two checkpoint bundles
 

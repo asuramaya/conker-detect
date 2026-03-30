@@ -12,13 +12,21 @@ from conker_detect.audit import (
     audit_artifact,
     audit_bundle,
     audit_matrix,
+    carve_safetensors_slice,
     compare_bundles,
+    inspect_safetensors_file,
+    load_safetensors_tensors,
     spectral_stats,
 )
 
 
 def _save_file(path: Path, tensors: dict[str, np.ndarray]) -> None:
     save_file = pytest.importorskip("safetensors.numpy").save_file
+    save_file(tensors, str(path))
+
+
+def _save_torch_file(path: Path, tensors: dict[str, object]) -> None:
+    save_file = pytest.importorskip("safetensors.torch").save_file
     save_file(tensors, str(path))
 
 
@@ -131,6 +139,56 @@ def test_compare_bundles_reads_sharded_safetensors_repo(tmp_path: Path) -> None:
     assert result["shared_tensor_count"] == 2
     q_proj_row = next(row for row in result["tensors"] if row["name"] == "model.layers.0.self_attn.q_proj.weight")
     assert q_proj_row["compare"]["max_abs_deviation"] == 1.0
+
+
+def test_load_safetensors_tensors_reads_bfloat16_tensors(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    bundle = tmp_path / "bf16.safetensors"
+    expected = torch.tensor([[1.0, -2.5], [3.25, 0.5]], dtype=torch.float32)
+    _save_torch_file(bundle, {"model.layers.0.mlp.gate.weight": expected.to(torch.bfloat16)})
+
+    result = load_safetensors_tensors(bundle, name_regex="gate")
+
+    assert list(result) == ["model.layers.0.mlp.gate.weight"]
+    assert np.allclose(result["model.layers.0.mlp.gate.weight"], expected.numpy().astype(np.float64))
+
+
+def test_load_safetensors_tensors_reads_float8_tensors(tmp_path: Path) -> None:
+    torch = pytest.importorskip("torch")
+    if not hasattr(torch, "float8_e4m3fn"):
+        pytest.skip("torch float8_e4m3fn not available")
+    bundle = tmp_path / "fp8.safetensors"
+    expected = torch.tensor([[1.0, -2.5], [0.125, 12.0]], dtype=torch.float32)
+    _save_torch_file(bundle, {"model.layers.0.mlp.down_proj.weight": expected.to(torch.float8_e4m3fn)})
+
+    result = load_safetensors_tensors(bundle, name_regex="down_proj")
+
+    assert list(result) == ["model.layers.0.mlp.down_proj.weight"]
+    assert np.allclose(result["model.layers.0.mlp.down_proj.weight"], expected.to(torch.float8_e4m3fn).float().numpy().astype(np.float64))
+
+
+def test_carve_safetensors_slice_extracts_only_complete_tensors(tmp_path: Path) -> None:
+    source = tmp_path / "full.safetensors"
+    partial = tmp_path / "partial.bin"
+    carved = tmp_path / "carved.safetensors"
+    _save_file(
+        source,
+        {
+            "a_first": np.eye(2, dtype=np.float32),
+            "z_last": np.ones((4, 4), dtype=np.float32),
+        },
+    )
+    catalog = inspect_safetensors_file(source)
+    first_end = int(catalog["tensors"][0]["file_end"])
+    partial.write_bytes(source.read_bytes()[:first_end])
+
+    result = carve_safetensors_slice(partial, carved)
+    carved_report = audit_bundle(carved)
+
+    assert result["written_tensor_count"] == 1
+    assert result["skipped_incomplete_tensor_count"] == 1
+    assert carved_report["tensor_count"] == 1
+    assert carved_report["tensors"][0]["name"] == "a_first"
 
 
 def _write_sharded_safetensors_repo(repo_root: Path, shards: dict[str, dict[str, np.ndarray]]) -> None:

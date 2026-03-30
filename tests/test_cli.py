@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import pickle
+import struct
 import subprocess
 import sys
 import zlib
@@ -60,6 +61,15 @@ def _write_handoff_run_dir(tmp_path: Path) -> Path:
 def _save_safetensors(path: Path, tensors: dict[str, np.ndarray]) -> None:
     save_file = pytest.importorskip("safetensors.numpy").save_file
     save_file(tensors, str(path))
+
+
+def _truncate_after_first_tensor(source: Path, partial: Path) -> None:
+    raw = source.read_bytes()
+    header_len = struct.unpack("<Q", raw[:8])[0]
+    payload = json.loads(raw[8 : 8 + header_len].decode("utf-8"))
+    entries = [(name, meta) for name, meta in payload.items() if name != "__metadata__"]
+    first_end = 8 + header_len + int(entries[0][1]["data_offsets"][1])
+    partial.write_bytes(raw[:first_end])
 
 
 def test_legality_cli_writes_json(tmp_path: Path) -> None:
@@ -145,6 +155,33 @@ def test_bundle_cli_reads_safetensors_file(tmp_path: Path) -> None:
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["tensor_count"] == 1
     assert payload["tensors"][0]["name"] == "model.layers.0.mlp.down_proj.weight"
+
+
+def test_carve_cli_writes_probeable_safetensors_bundle(tmp_path: Path) -> None:
+    source = tmp_path / "full.safetensors"
+    partial = tmp_path / "partial.bin"
+    carved = tmp_path / "carved.safetensors"
+    carve_report = tmp_path / "carve.json"
+    bundle_report = tmp_path / "bundle.json"
+    _save_safetensors(
+        source,
+        {
+            "a_first": np.eye(2, dtype=np.float32),
+            "z_last": np.ones((4, 4), dtype=np.float32),
+        },
+    )
+    _truncate_after_first_tensor(source, partial)
+
+    carve_result = _run_cli("carve", str(partial), str(carved), "--json", str(carve_report))
+    bundle_result = _run_cli("bundle", str(carved), "--json", str(bundle_report))
+
+    assert carve_result.returncode == 0, carve_result.stderr
+    assert bundle_result.returncode == 0, bundle_result.stderr
+    carve_payload = json.loads(carve_report.read_text(encoding="utf-8"))
+    bundle_payload = json.loads(bundle_report.read_text(encoding="utf-8"))
+    assert carve_payload["written_tensor_count"] == 1
+    assert bundle_payload["tensor_count"] == 1
+    assert bundle_payload["tensors"][0]["name"] == "a_first"
 
 
 def test_submission_cli_writes_json_and_markdown(tmp_path: Path) -> None:

@@ -4,15 +4,37 @@ import csv
 import json
 import pickle
 import re
+import struct
 import zlib
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 try:
-    from safetensors import safe_open
-except ImportError:  # pragma: no cover - dependency guard
-    safe_open = None
+    import torch
+except ImportError:  # pragma: no cover - optional dtype fallback
+    torch = None
+
+
+NUMPY_SAFETENSORS_DTYPES: dict[str, np.dtype[Any]] = {
+    "BOOL": np.dtype(np.bool_),
+    "F16": np.dtype("<f2"),
+    "F32": np.dtype("<f4"),
+    "F64": np.dtype("<f8"),
+    "I8": np.dtype("i1"),
+    "I16": np.dtype("<i2"),
+    "I32": np.dtype("<i4"),
+    "I64": np.dtype("<i8"),
+    "U8": np.dtype("u1"),
+    "U16": np.dtype("<u2"),
+    "U32": np.dtype("<u4"),
+    "U64": np.dtype("<u8"),
+}
+
+TORCH_SAFETENSORS_DTYPES: dict[str, str] = {
+    "F8_E4M3": "float8_e4m3fn",
+    "F8_E5M2": "float8_e5m2",
+}
 
 
 def load_matrix(path: Path) -> np.ndarray:
@@ -53,15 +75,21 @@ def load_safetensors_tensors(
     only_2d: bool = True,
     only_square: bool = False,
     name_regex: str | None = None,
+    names: set[str] | None = None,
 ) -> dict[str, np.ndarray]:
-    _require_safetensors()
-    patt = re.compile(name_regex) if name_regex else None
+    catalog = inspect_safetensors_file(path, name_regex=name_regex)
     out: dict[str, np.ndarray] = {}
-    with safe_open(str(path), framework="numpy") as handle:
-        for name in handle.keys():
-            if patt and not patt.search(name):
+    with path.open("rb") as f:
+        for entry in catalog["tensors"]:
+            name = str(entry["name"])
+            if names is not None and name not in names:
                 continue
-            arr = np.asarray(handle.get_tensor(name), dtype=np.float64)
+            if not entry["complete"]:
+                continue
+            f.seek(int(entry["file_offset"]))
+            blob = f.read(int(entry["nbytes"]))
+            arr = _decode_safetensors_tensor_bytes(blob, str(entry["dtype"]), tuple(entry["shape"]))
+            arr = np.asarray(arr, dtype=np.float64)
             if only_2d and arr.ndim != 2:
                 continue
             if only_square and (arr.ndim != 2 or arr.shape[0] != arr.shape[1]):
@@ -77,7 +105,6 @@ def load_safetensors_repo_tensors(
     only_square: bool = False,
     name_regex: str | None = None,
 ) -> dict[str, np.ndarray]:
-    _require_safetensors()
     repo_root, weight_map = _resolve_safetensors_weight_map(path)
     patt = re.compile(name_regex) if name_regex else None
     selected_names = [name for name in sorted(weight_map) if not patt or patt.search(name)]
@@ -89,14 +116,14 @@ def load_safetensors_repo_tensors(
         shard_path = repo_root / shard_name
         if not shard_path.exists():
             raise FileNotFoundError(shard_path)
-        with safe_open(str(shard_path), framework="numpy") as handle:
-            for name in tensor_names:
-                arr = np.asarray(handle.get_tensor(name), dtype=np.float64)
-                if only_2d and arr.ndim != 2:
-                    continue
-                if only_square and (arr.ndim != 2 or arr.shape[0] != arr.shape[1]):
-                    continue
-                out[name] = arr
+        out.update(
+            load_safetensors_tensors(
+                shard_path,
+                only_2d=only_2d,
+                only_square=only_square,
+                names=set(tensor_names),
+            )
+        )
     return out
 
 
@@ -139,7 +166,6 @@ def load_tensor_bundle(
 
 
 def _resolve_safetensors_weight_map(path: Path) -> tuple[Path, dict[str, str]]:
-    _require_safetensors()
     if path.is_file():
         index_payload = json.loads(path.read_text(encoding="utf-8"))
         weight_map = index_payload.get("weight_map")
@@ -159,22 +185,156 @@ def _resolve_safetensors_weight_map(path: Path) -> tuple[Path, dict[str, str]]:
         raise ValueError(f"No safetensors files found in {repo_root}")
     if len(shard_paths) == 1:
         single = shard_paths[0]
-        with safe_open(str(single), framework="numpy") as handle:
-            return repo_root, {str(name): single.name for name in handle.keys()}
+        catalog = inspect_safetensors_file(single)
+        return repo_root, {str(entry["name"]): single.name for entry in catalog["tensors"]}
 
     weight_map: dict[str, str] = {}
     for shard_path in shard_paths:
-        with safe_open(str(shard_path), framework="numpy") as handle:
-            for name in handle.keys():
-                if name in weight_map:
-                    raise ValueError(f"Tensor name {name!r} appears in multiple safetensors shards")
-                weight_map[str(name)] = shard_path.name
+        catalog = inspect_safetensors_file(shard_path)
+        for entry in catalog["tensors"]:
+            name = str(entry["name"])
+            if name in weight_map:
+                raise ValueError(f"Tensor name {name!r} appears in multiple safetensors shards")
+            weight_map[name] = shard_path.name
     return repo_root, weight_map
 
 
-def _require_safetensors() -> None:
-    if safe_open is None:
-        raise ImportError("safetensors support requires installing the 'safetensors' package")
+def inspect_safetensors_file(path: Path, *, name_regex: str | None = None) -> dict[str, Any]:
+    patt = re.compile(name_regex) if name_regex else None
+    file_size = int(path.stat().st_size)
+    with path.open("rb") as f:
+        prefix = f.read(8)
+        if len(prefix) != 8:
+            raise ValueError(f"Safetensors file is truncated before the header prefix: {path}")
+        header_len = int(struct.unpack("<Q", prefix)[0])
+        header_bytes = f.read(header_len)
+        if len(header_bytes) != header_len:
+            raise ValueError(f"Safetensors file is truncated inside the header JSON: {path}")
+    payload = json.loads(header_bytes)
+    metadata = payload.get("__metadata__", {})
+    data_start = 8 + header_len
+    tensors: list[dict[str, Any]] = []
+    for name, meta in payload.items():
+        if name == "__metadata__":
+            continue
+        if patt and not patt.search(str(name)):
+            continue
+        shape = [int(dim) for dim in meta["shape"]]
+        start = int(meta["data_offsets"][0])
+        end = int(meta["data_offsets"][1])
+        tensors.append(
+            {
+                "name": str(name),
+                "dtype": str(meta["dtype"]),
+                "shape": shape,
+                "data_offsets": [start, end],
+                "nbytes": int(end - start),
+                "file_offset": int(data_start + start),
+                "file_end": int(data_start + end),
+                "complete": bool(data_start + end <= file_size),
+            }
+        )
+    return {
+        "path": str(path),
+        "file_bytes": file_size,
+        "header_bytes": int(header_len),
+        "data_start": int(data_start),
+        "metadata": metadata,
+        "tensor_count": len(tensors),
+        "complete_tensor_count": int(sum(1 for entry in tensors if entry["complete"])),
+        "tensors": tensors,
+    }
+
+
+def carve_safetensors_slice(
+    src_path: Path,
+    out_path: Path,
+    *,
+    only_2d: bool = False,
+    only_square: bool = False,
+    name_regex: str | None = None,
+    max_tensors: int | None = None,
+) -> dict[str, Any]:
+    catalog = inspect_safetensors_file(src_path, name_regex=name_regex)
+    selected: list[dict[str, Any]] = []
+    for entry in catalog["tensors"]:
+        if not entry["complete"]:
+            continue
+        if max_tensors is not None and len(selected) >= max_tensors:
+            break
+        shape = tuple(int(dim) for dim in entry["shape"])
+        if only_2d and len(shape) != 2:
+            continue
+        if only_square and (len(shape) != 2 or shape[0] != shape[1]):
+            continue
+        selected.append(entry)
+
+    payload = bytearray()
+    header: dict[str, Any] = {"__metadata__": catalog.get("metadata", {})}
+    cursor = 0
+    with src_path.open("rb") as f:
+        for entry in selected:
+            f.seek(int(entry["file_offset"]))
+            blob = f.read(int(entry["nbytes"]))
+            if len(blob) != int(entry["nbytes"]):
+                raise ValueError(f"Tensor bytes were not fully readable while carving {entry['name']!r}")
+            header[str(entry["name"])] = {
+                "dtype": str(entry["dtype"]),
+                "shape": [int(dim) for dim in entry["shape"]],
+                "data_offsets": [cursor, cursor + len(blob)],
+            }
+            payload.extend(blob)
+            cursor += len(blob)
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    header_bytes = json.dumps(header, separators=(",", ":")).encode("utf-8")
+    out_path.write_bytes(struct.pack("<Q", len(header_bytes)) + header_bytes + payload)
+    return {
+        "source": str(src_path),
+        "out": str(out_path),
+        "catalog_tensor_count": int(catalog["tensor_count"]),
+        "complete_tensor_count": int(catalog["complete_tensor_count"]),
+        "written_tensor_count": len(selected),
+        "written_payload_bytes": len(payload),
+        "skipped_incomplete_tensor_count": int(
+            sum(1 for entry in catalog["tensors"] if not entry["complete"])
+        ),
+        "name_regex": name_regex,
+    }
+
+
+def _decode_safetensors_tensor_bytes(blob: bytes, dtype_name: str, shape: tuple[int, ...]) -> np.ndarray:
+    count = int(np.prod(shape, dtype=np.int64))
+    if dtype_name in NUMPY_SAFETENSORS_DTYPES:
+        arr = np.frombuffer(blob, dtype=NUMPY_SAFETENSORS_DTYPES[dtype_name], count=count)
+    elif dtype_name == "BF16":
+        arr = _decode_bfloat16(blob, count)
+    elif dtype_name in TORCH_SAFETENSORS_DTYPES:
+        arr = _decode_torch_float_tensor(blob, dtype_name, count)
+    else:
+        raise ValueError(f"Unsupported safetensors dtype: {dtype_name}")
+    return np.asarray(arr).reshape(shape)
+
+
+def _decode_bfloat16(blob: bytes, count: int) -> np.ndarray:
+    words = np.frombuffer(blob, dtype=np.dtype("<u2"), count=count)
+    widened = (words.astype(np.uint32) << 16).view(np.float32)
+    return widened
+
+
+def _decode_torch_float_tensor(blob: bytes, dtype_name: str, count: int) -> np.ndarray:
+    dtype_attr = TORCH_SAFETENSORS_DTYPES[dtype_name]
+    if torch is None or not hasattr(torch, dtype_attr):
+        raise ImportError(
+            f"Decoding safetensors dtype {dtype_name} requires PyTorch with support for {dtype_attr}"
+        )
+    torch_dtype = getattr(torch, dtype_attr)
+    buffer = bytearray(blob)
+    values = torch.frombuffer(buffer, dtype=torch.uint8, count=len(buffer))
+    values = values.view(torch_dtype)
+    if values.numel() != count:
+        raise ValueError(f"Decoded tensor element count mismatch for dtype {dtype_name}: {values.numel()} vs {count}")
+    return values.float().cpu().numpy()
 
 
 DETERMINISTIC_SUBSTRATE_MARKERS = (

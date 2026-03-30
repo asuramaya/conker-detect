@@ -8,6 +8,7 @@ from .audit import (
     audit_artifact,
     audit_bundle,
     audit_matrix,
+    carve_safetensors_slice,
     compare_bundles,
     load_matrix,
     mask_geometry_stats,
@@ -82,6 +83,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_bundle.add_argument("--name-regex")
     p_bundle.add_argument("--expect-causal", action="append", default=[], help="Substring marking tensors that should be strict-lower causal")
     p_bundle.add_argument("--json")
+
+    p_carve = sub.add_parser("carve", help="Carve fully available tensors from a safetensors file or range slice into a standalone bundle")
+    p_carve.add_argument("source")
+    p_carve.add_argument("out")
+    p_carve.add_argument("--name-regex")
+    p_carve.add_argument("--only-2d", action="store_true")
+    p_carve.add_argument("--only-square", action="store_true")
+    p_carve.add_argument("--max-tensors", type=int)
+    p_carve.add_argument("--json")
 
     p_artifact = sub.add_parser("artifact", help="Audit a packed .ptz artifact for boundary and payload anomalies")
     p_artifact.add_argument("artifact")
@@ -205,6 +215,18 @@ def main() -> None:
             only_square=args.only_square,
             name_regex=args.name_regex,
             expect_causal=tuple(args.expect_causal),
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "carve":
+        result = carve_safetensors_slice(
+            Path(args.source),
+            Path(args.out),
+            only_2d=args.only_2d,
+            only_square=args.only_square,
+            name_regex=args.name_regex,
+            max_tensors=args.max_tensors,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
