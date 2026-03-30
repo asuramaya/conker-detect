@@ -1,11 +1,12 @@
 {
   "name": "fixture-campaign",
   "models": ["model-a", "model-b", "model-c"],
-  "families": ["quoted", "code_fence", "uppercase"],
+  "families": ["quoted", "code_fence", "uppercase", "system_prefix", "assistant_ack"],
   "mix_depth": 2,
   "top_k": 2,
   "minimize": {
     "metric": "chat",
+    "unit": "char",
     "model": "model-a"
   },
   "cases": [

@@ -139,6 +139,22 @@ def test_mutate_case_generates_named_variants() -> None:
     assert "json_wrapper" in serialized
 
 
+def test_mutate_case_supports_message_level_variants() -> None:
+    trigger = _trigger()
+    if not hasattr(trigger, "mutate_case"):
+        pytest.skip("mutate_case is not implemented yet")
+
+    case = _load_case(FIXTURES / "trigger_case_shared.json")
+    result = trigger.mutate_case(case, families=["system_prefix", "assistant_ack", "split_last"])
+
+    assert isinstance(result, dict)
+    assert result["variant_count"] == 3
+    by_family = {row["family"]: row for row in result["variants"]}
+    assert by_family["system_prefix"]["case"]["messages"][0]["role"] == "system"
+    assert any(message["role"] == "assistant" for message in by_family["assistant_ack"]["case"]["messages"])
+    assert len(by_family["split_last"]["case"]["messages"]) >= 2
+
+
 def test_sweep_variants_ranks_mutations_by_combined_score() -> None:
     trigger = _trigger()
     if not hasattr(trigger, "sweep_variants"):
@@ -172,4 +188,22 @@ def test_minimize_trigger_reduces_candidate_token_count() -> None:
     assert isinstance(result, dict)
     assert result["minimized_token_count"] <= result["original_token_count"]
     assert result["removed_token_count"] >= 0
+    assert result["final_score"] > 0.0
+
+
+def test_minimize_trigger_supports_char_unit_and_structural_candidates() -> None:
+    trigger = _trigger()
+    if not hasattr(trigger, "minimize_trigger"):
+        pytest.skip("minimize_trigger is not implemented yet")
+
+    provider_module = _load_module(FIXTURES / "trigger_provider.py", "trigger_provider")
+    provider = provider_module.build_provider({"temperature": 0})
+    control = _load_case(FIXTURES / "trigger_case_shared.json")
+    candidate = trigger.compose_case_mutations(control, ["system_prefix", "uppercase"])["case"]
+
+    result = trigger.minimize_trigger(provider, control, candidate, model="demo-model", metric="chat", unit="char")
+
+    assert isinstance(result, dict)
+    assert result["unit"] == "char"
+    assert result["minimized_token_count"] <= result["original_token_count"]
     assert result["final_score"] > 0.0

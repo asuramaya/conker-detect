@@ -301,9 +301,9 @@ These commands are for regime-switch hunting, not legality:
 - `chatdiff`: compare completions for two prompt cases on one model
 - `actdiff`: compare module activations for two prompt cases on one model
 - `crossmodel`: compare one prompt case across multiple models and rank pairwise differences
-- `mutate`: generate structured prompt variants for search
+- `mutate`: generate structured prompt variants for search, including message-level wrappers such as `system_prefix`, `assistant_ack`, `user_followup`, and `split_last`
 - `sweep`: score those variants against a base case across one or more models
-- `minimize`: greedily shrink a candidate trigger while preserving a chosen difference metric
+- `minimize`: greedily shrink a candidate trigger while preserving a chosen difference metric, at `token`, `line`, or `char` granularity
 - `attack`: run a full ranked campaign over seed prompts, single-family mutations, mixed mutations, and minimization
 
 The bundled `jsinfer` provider caches normalized API responses on disk so repeated prompt sweeps do not burn quota unnecessarily.

@@ -59,6 +59,7 @@ def normalize_campaign(campaign: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(minimize, dict):
         raise ValueError("minimize must be an object when present")
     metric = str(minimize.get("metric", "chat"))
+    unit = str(minimize.get("unit", "token"))
     threshold = minimize.get("threshold")
     if threshold is not None:
         threshold = float(threshold)
@@ -72,7 +73,7 @@ def normalize_campaign(campaign: dict[str, Any]) -> dict[str, Any]:
         "families": families,
         "mix_depth": mix_depth,
         "top_k": top_k,
-        "minimize": {"metric": metric, "threshold": threshold, "model": model},
+        "minimize": {"metric": metric, "unit": unit, "threshold": threshold, "model": model},
     }
 
 
@@ -117,6 +118,7 @@ def run_attack_campaign(provider: Any, campaign: dict[str, Any]) -> dict[str, An
                 candidate["candidate_case"],
                 model=minimize_model,
                 metric=minimize_cfg["metric"],
+                unit=minimize_cfg["unit"],
                 threshold=minimize_cfg["threshold"],
             )
         )

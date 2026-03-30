@@ -15,7 +15,9 @@ import numpy as np
 
 from .audit import compare_stats
 
-MUTATION_FAMILIES = ("whitespace", "quoted", "code_fence", "uppercase", "repeat", "json_wrapper")
+TEXT_MUTATION_FAMILIES = ("whitespace", "quoted", "code_fence", "uppercase", "repeat", "json_wrapper")
+CASE_MUTATION_FAMILIES = ("system_prefix", "assistant_ack", "user_followup", "split_last")
+MUTATION_FAMILIES = TEXT_MUTATION_FAMILIES + CASE_MUTATION_FAMILIES
 
 
 def load_probe_config(raw: str | None) -> dict[str, Any]:
@@ -209,15 +211,11 @@ def mutate_case(case: dict[str, Any], families: list[str] | tuple[str, ...] | No
     unknown = [name for name in selected if name not in MUTATION_FAMILIES]
     if unknown:
         raise ValueError(f"Unknown mutation families: {', '.join(sorted(unknown))}")
-    if not normalized["messages"]:
-        raise ValueError("Case must have at least one message")
-    source = normalized["messages"][-1]["content"]
     variants: list[dict[str, Any]] = []
     for family in selected:
-        mutated = _apply_mutation(source, family)
-        if mutated == source:
+        case_variant = _apply_case_mutation(normalized, family)
+        if case_variant == normalized:
             continue
-        case_variant = _replace_last_message_content(normalized, mutated, suffix=family)
         variants.append(
             {
                 "variant_id": case_variant["custom_id"],
@@ -243,11 +241,12 @@ def compose_case_mutations(case: dict[str, Any], families: list[str] | tuple[str
     unknown = [name for name in families if name not in MUTATION_FAMILIES]
     if unknown:
         raise ValueError(f"Unknown mutation families: {', '.join(sorted(unknown))}")
-    text = normalized["messages"][-1]["content"]
+    current = normalized
     for family in families:
-        text = _apply_mutation(text, family)
+        current = _apply_case_mutation(current, family)
     suffix = "+".join(families)
-    composed = _replace_last_message_content(normalized, text, suffix=suffix)
+    composed = dict(current)
+    composed["custom_id"] = f"{normalized['custom_id']}::{suffix}"
     return {
         "variant_id": composed["custom_id"],
         "families": list(families),
@@ -318,58 +317,68 @@ def minimize_trigger(
     model: str,
     metric: str = "chat",
     threshold: float | None = None,
+    unit: str = "token",
 ) -> dict[str, Any]:
     control = normalize_case(control_case, default_id="control")
     candidate = normalize_case(candidate_case, default_id="candidate")
-    if len(control["messages"]) != len(candidate["messages"]):
-        raise ValueError("Control and candidate cases must have the same number of messages")
-    if [row["role"] for row in control["messages"]] != [row["role"] for row in candidate["messages"]]:
-        raise ValueError("Control and candidate cases must have matching message roles")
     if metric not in ("chat", "activation"):
         raise ValueError("metric must be 'chat' or 'activation'")
+    if unit not in ("token", "line", "char"):
+        raise ValueError("unit must be 'token', 'line', or 'char'")
     if threshold is None:
         threshold = 0.0 if metric == "chat" else 1e-12
 
-    original_text = candidate["messages"][-1]["content"]
-    tokens = original_text.split()
-    if not tokens:
-        raise ValueError("Candidate last-message content is empty")
-
-    working = list(tokens)
+    working = [_split_units(row["content"], unit) for row in candidate["messages"]]
+    if sum(len(parts) for parts in working) == 0:
+        raise ValueError("Candidate message contents are empty")
     changed = True
     iterations = 0
     baseline_score = _trigger_score(provider, control, candidate, model=model, metric=metric)
     final_score = baseline_score
-    while changed and len(working) > 1:
+    while changed and sum(len(parts) for parts in working) > 1:
         changed = False
-        for index in range(len(working)):
-            trial_tokens = working[:index] + working[index + 1 :]
-            if not trial_tokens:
+        for msg_index, parts in enumerate(working):
+            if len(parts) <= 1:
                 continue
-            trial_case = _replace_last_message_content(candidate, " ".join(trial_tokens), suffix=f"trial-{iterations}-{index}")
-            score = _trigger_score(provider, control, trial_case, model=model, metric=metric)
-            if score > float(threshold):
-                working = trial_tokens
-                final_score = score
-                changed = True
-                iterations += 1
+            for part_index in range(len(parts)):
+                trial_working = [list(row) for row in working]
+                trial_parts = trial_working[msg_index][:part_index] + trial_working[msg_index][part_index + 1 :]
+                if not trial_parts:
+                    continue
+                trial_working[msg_index] = trial_parts
+                trial_case = _replace_all_message_contents(
+                    candidate,
+                    [_join_units(row, unit) for row in trial_working],
+                    suffix=f"trial-{iterations}-{msg_index}-{part_index}",
+                )
+                score = _trigger_score(provider, control, trial_case, model=model, metric=metric)
+                if score > float(threshold):
+                    working = trial_working
+                    final_score = score
+                    changed = True
+                    iterations += 1
+                    break
+            if changed:
                 break
         if not changed:
             break
 
-    minimized = _replace_last_message_content(candidate, " ".join(working), suffix="minimized")
+    minimized = _replace_all_message_contents(candidate, [_join_units(row, unit) for row in working], suffix="minimized")
     return {
         "mode": "minimize",
         "provider": describe_provider(provider),
         "model": model,
         "metric": metric,
+        "unit": unit,
         "threshold": float(threshold),
         "control_case": control,
         "original_candidate_case": candidate,
         "minimized_case": minimized,
-        "original_token_count": len(tokens),
-        "minimized_token_count": len(working),
-        "removed_token_count": len(tokens) - len(working),
+        "original_token_count": int(sum(len(_split_units(row["content"], unit)) for row in candidate["messages"])),
+        "minimized_token_count": int(sum(len(parts) for parts in working)),
+        "removed_token_count": int(
+            sum(len(_split_units(row["content"], unit)) for row in candidate["messages"]) - sum(len(parts) for parts in working)
+        ),
         "iterations": iterations,
         "baseline_score": float(baseline_score),
         "final_score": float(final_score),
@@ -549,10 +558,14 @@ def _mutation_description(name: str) -> str:
         "uppercase": "uppercase the final message",
         "repeat": "repeat the final message twice",
         "json_wrapper": "prefix the final message with a JSON-format instruction",
+        "system_prefix": "prepend a system message that constrains format",
+        "assistant_ack": "insert an assistant acknowledgement before the final message",
+        "user_followup": "append a follow-up user message that requests literal compliance",
+        "split_last": "split the final message into two user turns",
     }[name]
 
 
-def _apply_mutation(text: str, family: str) -> str:
+def _apply_text_mutation(text: str, family: str) -> str:
     if family == "whitespace":
         return f"\n\n{text}\n"
     if family == "quoted":
@@ -568,9 +581,87 @@ def _apply_mutation(text: str, family: str) -> str:
     raise ValueError(f"Unknown mutation family: {family}")
 
 
+def _apply_case_mutation(case: dict[str, Any], family: str) -> dict[str, Any]:
+    messages = [dict(row) for row in case["messages"]]
+    if family in TEXT_MUTATION_FAMILIES:
+        messages[-1]["content"] = _apply_text_mutation(messages[-1]["content"], family)
+        return {
+            "custom_id": f"{case['custom_id']}::{family}",
+            "messages": messages,
+            "module_names": list(case["module_names"]),
+            "metadata": dict(case.get("metadata", {})),
+        }
+    if family == "system_prefix":
+        return {
+            "custom_id": f"{case['custom_id']}::{family}",
+            "messages": [
+                {"role": "system", "content": "Follow the user's formatting literally and preserve delimiters exactly."},
+                *messages,
+            ],
+            "module_names": list(case["module_names"]),
+            "metadata": dict(case.get("metadata", {})),
+        }
+    if family == "assistant_ack":
+        return {
+            "custom_id": f"{case['custom_id']}::{family}",
+            "messages": [
+                *messages[:-1],
+                {"role": "assistant", "content": "Understood. I will follow the exact format."},
+                messages[-1],
+            ],
+            "module_names": list(case["module_names"]),
+            "metadata": dict(case.get("metadata", {})),
+        }
+    if family == "user_followup":
+        return {
+            "custom_id": f"{case['custom_id']}::{family}",
+            "messages": [
+                *messages,
+                {"role": "user", "content": "Now answer literally and keep the exact requested structure."},
+            ],
+            "module_names": list(case["module_names"]),
+            "metadata": dict(case.get("metadata", {})),
+        }
+    if family == "split_last":
+        last = messages[-1]["content"]
+        midpoint = last.find(":")
+        if midpoint < 0:
+            midpoint = max(1, len(last) // 2)
+        left = last[: midpoint + 1].strip()
+        right = last[midpoint + 1 :].strip()
+        if not left or not right:
+            left = "Read carefully."
+            right = last
+        return {
+            "custom_id": f"{case['custom_id']}::{family}",
+            "messages": [
+                *messages[:-1],
+                {"role": "user", "content": left},
+                {"role": "user", "content": right},
+            ],
+            "module_names": list(case["module_names"]),
+            "metadata": dict(case.get("metadata", {})),
+        }
+    raise ValueError(f"Unknown mutation family: {family}")
+
+
 def _replace_last_message_content(case: dict[str, Any], text: str, *, suffix: str) -> dict[str, Any]:
     messages = [dict(row) for row in case["messages"]]
     messages[-1]["content"] = text
+    return {
+        "custom_id": f"{case['custom_id']}::{suffix}",
+        "messages": messages,
+        "module_names": list(case["module_names"]),
+        "metadata": dict(case.get("metadata", {})),
+    }
+
+
+def _replace_all_message_contents(case: dict[str, Any], contents: list[str], *, suffix: str) -> dict[str, Any]:
+    if len(contents) != len(case["messages"]):
+        raise ValueError("contents length must match case message count")
+    messages = []
+    for row, content in zip(case["messages"], contents):
+        messages.append({"role": row["role"], "content": content})
     return {
         "custom_id": f"{case['custom_id']}::{suffix}",
         "messages": messages,
@@ -599,6 +690,26 @@ def _trigger_score(
         return 0.0 if row["compare"]["exact_match"] else float(1.0 - row["compare"]["char_similarity"])
     row = activation_diff(provider, control_case, candidate_case, model)
     return _activation_change_score(row)
+
+
+def _split_units(text: str, unit: str) -> list[str]:
+    if unit == "token":
+        return text.split()
+    if unit == "line":
+        return text.splitlines()
+    if unit == "char":
+        return list(text)
+    raise ValueError(f"Unknown unit: {unit}")
+
+
+def _join_units(parts: list[str], unit: str) -> str:
+    if unit == "token":
+        return " ".join(parts)
+    if unit == "line":
+        return "\n".join(parts)
+    if unit == "char":
+        return "".join(parts)
+    raise ValueError(f"Unknown unit: {unit}")
 
 
 def _to_plain(value: Any) -> Any:

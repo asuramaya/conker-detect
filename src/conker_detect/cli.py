@@ -224,6 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_minimize.add_argument("--candidate", required=True, help="JSON file describing the trigger candidate case")
     p_minimize.add_argument("--model", required=True)
     p_minimize.add_argument("--metric", choices=["chat", "activation"], default="chat")
+    p_minimize.add_argument("--unit", choices=["token", "line", "char"], default="token")
     p_minimize.add_argument("--threshold", type=float)
     p_minimize.add_argument("--json")
 
@@ -470,6 +471,7 @@ def main() -> None:
             load_case(args.candidate, default_id="candidate"),
             model=args.model,
             metric=args.metric,
+            unit=args.unit,
             threshold=args.threshold,
         )
         _write_output(json.dumps(result, indent=2), args.json)
