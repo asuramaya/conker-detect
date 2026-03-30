@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import pickle
@@ -14,6 +15,7 @@ import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
+FIXTURES = ROOT / "tests" / "fixtures"
 
 
 def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
@@ -70,6 +72,20 @@ def _truncate_after_first_tensor(source: Path, partial: Path) -> None:
     entries = [(name, meta) for name, meta in payload.items() if name != "__metadata__"]
     first_end = 8 + header_len + int(entries[0][1]["data_offsets"][1])
     partial.write_bytes(raw[:first_end])
+
+
+def _available_commands() -> set[str]:
+    from conker_detect.cli import build_parser
+
+    parser = build_parser()
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return set(action.choices)
+    return set()
+
+
+def _trigger_command_available(name: str) -> bool:
+    return name in _available_commands()
 
 
 def test_legality_cli_writes_json(tmp_path: Path) -> None:
@@ -442,3 +458,108 @@ def test_handoff_cli_propagates_legality_trust(tmp_path: Path) -> None:
     assert audits["tier3"]["trust_level_requested"] == "traced"
     assert audits["tier3"]["trust_level_achieved"] == "basic"
     assert audits["tier3"]["trust_satisfied"] is False
+
+
+def test_chatdiff_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("chatdiff"):
+        pytest.skip("trigger CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    lhs = FIXTURES / "trigger_case_lhs.json"
+    rhs = FIXTURES / "trigger_case_rhs.json"
+    out_path = tmp_path / "chatdiff.json"
+
+    result = _run_cli(
+        "chatdiff",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        "{\"temperature\":0}",
+        "--lhs",
+        str(lhs),
+        "--rhs",
+        str(rhs),
+        "--model",
+        "demo-model",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(payload)
+    assert "completion::demo-model::" in serialized
+    assert "Compare the red fox and the blue fox." in serialized
+    assert "Compare the red fox and the green fox." in serialized
+
+
+def test_actdiff_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("actdiff"):
+        pytest.skip("trigger CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    lhs = FIXTURES / "trigger_case_lhs.json"
+    rhs = FIXTURES / "trigger_case_rhs.json"
+    out_path = tmp_path / "actdiff.json"
+
+    result = _run_cli(
+        "actdiff",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        str(FIXTURES / "trigger_provider_config.json"),
+        "--lhs",
+        str(lhs),
+        "--rhs",
+        str(rhs),
+        "--model",
+        "demo-model",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(payload)
+    assert "layer.0" in serialized
+    assert "layer.1" in serialized
+    assert "layer.2" in serialized
+    assert "cosine" in serialized
+    assert "l2" in serialized
+    assert "max_abs" in serialized
+
+
+def test_crossmodel_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("crossmodel"):
+        pytest.skip("trigger CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    case = FIXTURES / "trigger_case_shared.json"
+    out_path = tmp_path / "crossmodel.json"
+
+    result = _run_cli(
+        "crossmodel",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        "{\"temperature\":0}",
+        "--case",
+        str(case),
+        "--model",
+        "model-a",
+        "--model",
+        "model-b",
+        "--model",
+        "model-c",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    serialized = json.dumps(payload)
+    assert "model-a" in serialized
+    assert "model-b" in serialized
+    assert "model-c" in serialized
+    assert "chat" in serialized or "completion" in serialized
+    assert "activation" in serialized or "cosine" in serialized

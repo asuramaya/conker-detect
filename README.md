@@ -154,6 +154,12 @@ That is the point: if a result survives only while the forbidden structure is le
 pip install .
 ```
 
+For the Jane Street dormant-model puzzle backend:
+
+```bash
+pip install .[dormant]
+```
+
 or run directly:
 
 ```bash
@@ -248,6 +254,55 @@ You can also compare local Hugging Face safetensors repos directly:
 ```bash
 conker-detect compare /path/to/dormant-model-1 /path/to/dormant-model-2 --name-regex 'down_proj|q_proj'
 ```
+
+### Probe dormant-model triggers
+
+For gray-box APIs such as `jsinfer`, `conker-detect` now has a separate message-level probe surface:
+
+```bash
+conker-detect chatdiff \
+  --provider conker_detect.providers.jsinfer_provider \
+  --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  --lhs cases/control.json \
+  --rhs cases/trigger.json \
+  --model dormant-model-1
+```
+
+```bash
+conker-detect actdiff \
+  --provider conker_detect.providers.jsinfer_provider \
+  --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  --lhs cases/control.json \
+  --rhs cases/trigger.json \
+  --model dormant-model-1
+```
+
+```bash
+conker-detect crossmodel \
+  --provider conker_detect.providers.jsinfer_provider \
+  --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  --case cases/candidate.json \
+  --model dormant-model-1 \
+  --model dormant-model-2 \
+  --model dormant-model-3
+```
+
+Case JSON shape:
+
+```json
+{
+  "messages": [{"role": "user", "content": "Summarize the fox story in one sentence."}],
+  "module_names": ["model.layers.0.mlp.down_proj"]
+}
+```
+
+These commands are for regime-switch hunting, not legality:
+
+- `chatdiff`: compare completions for two prompt cases on one model
+- `actdiff`: compare module activations for two prompt cases on one model
+- `crossmodel`: compare one prompt case across multiple models and rank pairwise differences
+
+The bundled `jsinfer` provider caches normalized API responses on disk so repeated prompt sweeps do not burn quota unnecessarily.
 
 ### Audit a packed artifact
 

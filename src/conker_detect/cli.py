@@ -22,6 +22,7 @@ from .ledger_handoff import write_ledger_bundle_manifest
 from .provenance import audit_provenance
 from .replay import replay_runtime
 from .submission import audit_submission
+from .trigger import activation_diff, chat_diff, cross_model_compare, load_case, load_probe_config, load_provider
 
 
 def _write_output(text: str, json_path: str | None) -> None:
@@ -167,6 +168,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_compare.add_argument("--name-regex")
     p_compare.add_argument("--strip-prefix", action="append", default=[], help="Prefix to strip before name matching, e.g. student.")
     p_compare.add_argument("--json")
+
+    p_chatdiff = sub.add_parser("chatdiff", help="Compare chat completions for two prompt cases on one model")
+    p_chatdiff.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_chatdiff.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_chatdiff.add_argument("--lhs", required=True, help="JSON file describing the left prompt case")
+    p_chatdiff.add_argument("--rhs", required=True, help="JSON file describing the right prompt case")
+    p_chatdiff.add_argument("--model", required=True)
+    p_chatdiff.add_argument("--json")
+
+    p_actdiff = sub.add_parser("actdiff", help="Compare activations for two prompt cases on one model")
+    p_actdiff.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_actdiff.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_actdiff.add_argument("--lhs", required=True, help="JSON file describing the left prompt case")
+    p_actdiff.add_argument("--rhs", required=True, help="JSON file describing the right prompt case")
+    p_actdiff.add_argument("--model", required=True)
+    p_actdiff.add_argument("--json")
+
+    p_crossmodel = sub.add_parser("crossmodel", help="Compare one prompt case across multiple models")
+    p_crossmodel.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_crossmodel.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_crossmodel.add_argument("--case", required=True, help="JSON file describing the shared prompt case")
+    p_crossmodel.add_argument("--model", action="append", required=True, dest="models")
+    p_crossmodel.add_argument("--json")
 
     p_legality = sub.add_parser("legality", help="Behavioral legality audit via adapter-backed runtime probes")
     p_legality.add_argument("--adapter", required=True, help="Python adapter module or .py file exporting build_adapter(config)")
@@ -345,6 +369,38 @@ def main() -> None:
             only_square=args.only_square,
             name_regex=args.name_regex,
             strip_prefixes=tuple(args.strip_prefix),
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "chatdiff":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = chat_diff(
+            provider,
+            load_case(args.lhs, default_id="lhs"),
+            load_case(args.rhs, default_id="rhs"),
+            model=args.model,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "actdiff":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = activation_diff(
+            provider,
+            load_case(args.lhs, default_id="lhs"),
+            load_case(args.rhs, default_id="rhs"),
+            model=args.model,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "crossmodel":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = cross_model_compare(
+            provider,
+            load_case(args.case, default_id="case"),
+            models=list(args.models),
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return
