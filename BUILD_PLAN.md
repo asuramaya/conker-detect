@@ -11,34 +11,47 @@ The short version:
 
 ## Current Gaps
 
-The main missing capabilities are:
+The main landed capabilities now are:
 
 1. Tier 1 submission audit
-- code / README / `submission.json` / logs are not audited by the tool yet
+- `submission` and `provenance` are live
+- claim consistency, artifact bytes, protocol-shape markers, reproducibility, and selection disclosure are machine-audited
 
 2. Adapter trust and scoring traces
-- legality probes still depend on the honesty of the adapter surface
-- score accounting is only partially visible through optional `sample_gold_logprobs`
+- legality probes support `basic`, `traced`, and `strict` trust levels
+- score accounting and score-time state stability are visible when the adapter exposes traces
 
-3. Provenance outside the artifact
-- best-of-`k` outcome selection, train/eval contamination, and declared dataset boundaries are not represented
+3. Detector-to-packager handoff
+- `handoff` and `ledger-manifest` are live
+- detector outputs can now be turned into a `conker-ledger` bundle without hand-written manifests
 
-4. Power and replay depth
-- runtime probes are sampled and adapter-backed
+The remaining gaps are:
+
+1. Convenience around Tier 1 inputs
+- `submission` is still manifest-first
+- there is no direct `--repo-root/--submission-root` convenience mode yet
+
+2. Provenance depth
+- dataset fingerprints are represented, but overlap evidence and richer run-lineage disclosures are still declarative rather than replay-verified
+
+3. Replay power
+- runtime probes and replay remain sampled and adapter-backed
 - full finalist replay and outer-protocol checks are still missing
 
-5. Hardening
-- there was no test tree or CI
-- there is no public fixture corpus of known legal / illegal cases
+4. Fixture corpus
+- CI exists, but there is still no broader public corpus of known legal / illegal fixtures beyond the synthetic demo adapters
+
+5. Cross-repo presentation
+- `conker-ledger` can package detector outputs, but summary rendering still needs to keep pace as detector reports gain more nuance
 
 ## Parallel Workstreams
 
 These tracks can be owned by separate agents with disjoint write sets.
 
-### Track A: Tier 1 Submission Audit
+### Track A: Tier 1 Convenience and Fixture Expansion
 
 Goal:
-- add a first-class `submission` audit command
+- make Tier 1 easier to run and harder to regress
 
 Suggested files:
 - `src/conker_detect/submission.py`
@@ -49,13 +62,13 @@ Suggested files:
 - `tests/test_submission.py`
 - `examples/submission_fixtures/`
 
-CLI shape:
+Already landed:
 
 ```bash
 conker-detect submission manifest.json --json out/tier1.json --md out/tier1.md
 ```
 
-Convenience form:
+Next convenience form:
 
 ```bash
 conker-detect submission \
@@ -84,10 +97,10 @@ Outputs:
 - `pass` / `warn` / `fail`
 - structured findings with file references
 
-### Track B: Legality Trace Extension
+### Track B: Legality and Trust Hardening
 
 Goal:
-- reduce adapter trust by extending the legality contract
+- keep tightening the legality contract without pretending the adapter surface is a proof
 
 Suggested files:
 - `src/conker_detect/legality.py`
@@ -110,8 +123,10 @@ Suggested trace fields:
 - `state_hash_before`
 - `state_hash_after`
 
-CLI shape:
+Already landed:
 - `--trust-level basic|traced|strict`
+- trace-backed accounting and state-hash checks
+- one-shot handoff propagation of legality trust
 
 Checks:
 - returned scalar gold scores match returned distributions
@@ -205,38 +220,51 @@ Files:
 - `AUDIT_STANDARD.md`
 - `.github/workflows/tests.yml`
 
+### Track F: Cross-Repo Bundle Presentation
+
+Goal:
+- keep `conker-ledger` summaries aligned with detector output semantics
+
+Suggested files:
+- `../conker-ledger/src/conker_ledger/ledger.py`
+- `../conker-ledger/tests/test_bundle.py`
+- `../conker-ledger/README.md`
+
+Current need:
+- surface Tier 3 scope and legality trust in packaged bundle READMEs
+
 ## Phase Plan
 
 ### Phase 1
 
-Land immediately:
+Landed:
 
 - test tree and CI
-- stronger legality/accounting fixtures
-- basic build-plan documentation
-
-Exit criteria:
-- every current CLI mode has at least one regression test
-- legal and illegal demo adapters are covered in CI
+- legality/accounting fixtures
+- Tier 1 submission audit
+- provenance manifest schema
+- trust-level legality reporting
+- one-shot detector-to-ledger handoff
 
 ### Phase 2
 
 Land next:
 
-- Tier 1 `submission` audit
-- provenance manifest schema
+- Tier 1 convenience flags
+- larger public fixture corpus
+- `conker-ledger` trust/scope presentation
 
 Exit criteria:
-- code-only `parameter-golf` PRs can be audited without artifacts
-- claim / artifact / log mismatches produce machine-readable findings
+- code-only `parameter-golf` PRs can be audited with minimal CLI ceremony
+- packaged bundles preserve Tier 3 nuance instead of collapsing it to pass/warn/fail
 
 ### Phase 3
 
 Land for finalists:
 
 - replay-strength upgrades
-- expanded accounting traces
-- explicit run-selection manifests
+- stronger suffix schedules
+- explicit outer-protocol / run-selection evidence
 
 Exit criteria:
 - finalist submissions can receive a stronger Tier 3 report
