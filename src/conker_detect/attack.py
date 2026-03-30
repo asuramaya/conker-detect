@@ -210,7 +210,18 @@ def _rank_candidates(case_reports: list[dict[str, Any]], mixed_reports: list[dic
     rows: list[dict[str, Any]] = []
     for report in case_reports:
         pairwise = report["crossmodel"]["chat"]["pairwise"]
-        crossmodel_score = float(max((row["compare"].get("score", 0.0) for row in pairwise), default=0.0))
+        crossmodel_score = float(
+            max(
+                (
+                    row["compare"].get(
+                        "purity_adjusted_score",
+                        row["compare"].get("noise_penalized_score", row["compare"].get("score", 0.0)),
+                    )
+                    for row in pairwise
+                ),
+                default=0.0,
+            )
+        )
         for variant in report["sweep"]["variants"]:
             rows.append(
                 {

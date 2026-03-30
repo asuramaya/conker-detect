@@ -639,6 +639,59 @@ def test_sweep_cli_writes_json_when_available(tmp_path: Path) -> None:
     assert payload["sampling"]["chat_repeats"] == 2
 
 
+def test_scorecases_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("scorecases"):
+        pytest.skip("scorecases CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    suite = tmp_path / "suite.json"
+    base_case = json.loads((FIXTURES / "trigger_case_shared.json").read_text(encoding="utf-8"))
+    quoted_case = dict(base_case)
+    quoted_case["custom_id"] = "case::quoted"
+    quoted_case["messages"] = [{"role": "user", "content": f"\"{base_case['messages'][-1]['content']}\""}]
+    uppercase_case = dict(base_case)
+    uppercase_case["custom_id"] = "case::uppercase"
+    uppercase_case["messages"] = [{"role": "user", "content": base_case["messages"][-1]["content"].upper()}]
+    suite.write_text(
+        json.dumps(
+            {
+                "mode": "suite",
+                "base_case": base_case,
+                "variants": [
+                    {"variant_id": "quoted", "case": quoted_case},
+                    {"variant_id": "uppercase", "case": uppercase_case},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    out_path = tmp_path / "scorecases.json"
+
+    result = _run_cli(
+        "scorecases",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        "{\"temperature\":0}",
+        "--suite",
+        str(suite),
+        "--model",
+        "model-a",
+        "--model",
+        "model-b",
+        "--repeats",
+        "2",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["mode"] == "scorecases"
+    assert payload["variant_count"] == 2
+    assert payload["sampling"]["chat_repeats"] == 2
+
+
 def test_minimize_cli_writes_json_when_available(tmp_path: Path) -> None:
     if not _trigger_command_available("minimize"):
         pytest.skip("trigger minimize CLI not implemented yet")
@@ -703,3 +756,108 @@ def test_attack_cli_writes_json_when_available(tmp_path: Path) -> None:
     assert payload["campaign"]["chat_repeats"] == 2
     serialized = json.dumps(payload)
     assert "mixed_family" in serialized or "single_family" in serialized
+
+
+def test_leakage_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("leakage"):
+        pytest.skip("leakage CLI not implemented yet")
+
+    case = FIXTURES / "trigger_case_shared.json"
+    out_path = tmp_path / "leakage.json"
+
+    result = _run_cli("leakage", str(case), "--template", "verbatim", "--template", "hidden_text", "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["variant_count"] == 2
+    assert [row["template"] for row in payload["variants"]] == ["verbatim", "hidden_text"]
+
+
+def test_fuzzy_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("fuzzy"):
+        pytest.skip("fuzzy CLI not implemented yet")
+
+    case = FIXTURES / "trigger_case_shared.json"
+    out_path = tmp_path / "fuzzy.json"
+
+    result = _run_cli("fuzzy", str(case), "--family", "quote_wrap", "--family", "partial_prefix", "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["variant_count"] == 2
+    assert payload["variants"][0]["case"]["custom_id"].endswith("::quote_wrap")
+
+
+def test_actprobe_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("actprobe"):
+        pytest.skip("actprobe CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    positive = FIXTURES / "trigger_case_rhs.json"
+    negative = FIXTURES / "trigger_case_lhs.json"
+    out_path = tmp_path / "actprobe.json"
+
+    result = _run_cli(
+        "actprobe",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        "{\"temperature\":0}",
+        "--positive-case",
+        str(positive),
+        "--negative-case",
+        str(negative),
+        "--model",
+        "demo-model",
+        "--module",
+        "layer.0",
+        "--module",
+        "layer.1",
+        "--module",
+        "layer.2",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["mode"] == "actprobe"
+    assert payload["module_ranking"]
+    assert payload["probe"]["method"] == "mean_difference"
+
+
+def test_prior_cli_writes_json(tmp_path: Path) -> None:
+    out_path = tmp_path / "prior.json"
+    source = tmp_path / "compare.json"
+    source.write_text(
+        json.dumps(
+            {
+                "families": [
+                    {
+                        "family": "q_proj",
+                        "count": 3,
+                        "exact_match_count": 0,
+                        "mean_cosine_to_reference": 0.8,
+                        "mean_l2_deviation": 0.1,
+                        "max_max_abs_deviation": 0.4,
+                    },
+                    {
+                        "family": "down_proj",
+                        "count": 3,
+                        "exact_match_count": 3,
+                        "mean_cosine_to_reference": 1.0,
+                        "mean_l2_deviation": 0.0,
+                        "max_max_abs_deviation": 0.0,
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _run_cli("prior", str(source), "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["mode"] == "prior"
+    assert payload["families"][0]["family"] == "q_proj"

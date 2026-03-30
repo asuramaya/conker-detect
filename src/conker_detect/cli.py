@@ -19,13 +19,16 @@ from .audit import (
 )
 from .handoff import prepare_ledger_handoff
 from .legality import audit_legality, load_adapter, load_json_config, load_token_array
+from .leakage import FUZZY_MUTATION_FAMILIES, LEAKAGE_TEMPLATES, build_fuzzy_trigger_case_suite, build_leakage_probe_suite
 from .ledger_handoff import write_ledger_bundle_manifest
+from .priors import load_prior_source, summarize_static_priors
 from .provenance import audit_provenance
 from .replay import replay_runtime
 from .submission import audit_submission
 from .trigger import (
     MUTATION_FAMILIES,
     activation_diff,
+    activation_probe_report,
     chat_diff,
     cross_model_compare,
     load_case,
@@ -33,6 +36,7 @@ from .trigger import (
     load_provider,
     minimize_trigger,
     mutate_case,
+    score_case_suite,
     sweep_variants,
 )
 
@@ -220,6 +224,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_sweep.add_argument("--repeats", type=int, default=1, help="Number of repeated chat probes to aggregate per scored variant")
     p_sweep.add_argument("--json")
 
+    p_scorecases = sub.add_parser("scorecases", help="Score a generated case suite like leakage/fuzzy/mutate output against its base case")
+    p_scorecases.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_scorecases.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_scorecases.add_argument("--suite", required=True, help="JSON file describing a suite with base_case and variants[].case")
+    p_scorecases.add_argument("--model", action="append", required=True, dest="models")
+    p_scorecases.add_argument("--repeats", type=int, default=1, help="Number of repeated chat probes to aggregate per scored variant")
+    p_scorecases.add_argument("--json")
+
     p_minimize = sub.add_parser("minimize", help="Greedily minimize a trigger candidate against a control case")
     p_minimize.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
     p_minimize.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
@@ -238,6 +250,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_attack.add_argument("campaign", help="JSON campaign file defining models, cases, and mutation families")
     p_attack.add_argument("--repeats", type=int, help="Override campaign chat_repeats for live probing")
     p_attack.add_argument("--json")
+
+    p_leakage = sub.add_parser("leakage", help="Generate leakage-style probe cases from a base prompt case")
+    p_leakage.add_argument("case", help="JSON file describing the base prompt case")
+    p_leakage.add_argument("--template", action="append", dest="templates", choices=LEAKAGE_TEMPLATES)
+    p_leakage.add_argument("--json")
+
+    p_fuzzy = sub.add_parser("fuzzy", help="Generate fuzzy-trigger variants from a case JSON or literal string")
+    p_fuzzy.add_argument("source", help="Case JSON path or literal seed string")
+    p_fuzzy.add_argument("--family", action="append", dest="families", choices=FUZZY_MUTATION_FAMILIES)
+    p_fuzzy.add_argument("--json")
+
+    p_actprobe = sub.add_parser("actprobe", help="Fit lightweight activation probes from positive and negative prompt cases")
+    p_actprobe.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_actprobe.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_actprobe.add_argument("--positive-case", action="append", dest="positive_cases", required=True, help="JSON file describing a positive prompt case")
+    p_actprobe.add_argument("--negative-case", action="append", dest="negative_cases", required=True, help="JSON file describing a negative prompt case")
+    p_actprobe.add_argument("--model", required=True)
+    p_actprobe.add_argument("--module", action="append", dest="modules", help="Activation module name to request; defaults to module_names from the first case")
+    p_actprobe.add_argument("--method", choices=["ridge", "mean_difference"], default="mean_difference")
+    p_actprobe.add_argument("--json")
+
+    p_prior = sub.add_parser("prior", help="Turn bundle/compare reports into ranked static family priors")
+    p_prior.add_argument("source", help="JSON path or raw JSON report from bundle/compare output")
+    p_prior.add_argument("--json")
 
     p_legality = sub.add_parser("legality", help="Behavioral legality audit via adapter-backed runtime probes")
     p_legality.add_argument("--adapter", required=True, help="Python adapter module or .py file exporting build_adapter(config)")
@@ -471,6 +507,17 @@ def main() -> None:
         _write_output(json.dumps(result, indent=2), args.json)
         return
 
+    if args.command == "scorecases":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = score_case_suite(
+            provider,
+            load_prior_source(args.suite),
+            models=list(args.models),
+            chat_repeats=args.repeats,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
     if args.command == "minimize":
         provider = load_provider(args.provider, load_probe_config(args.provider_config))
         result = minimize_trigger(
@@ -493,6 +540,39 @@ def main() -> None:
             campaign = dict(campaign)
             campaign["chat_repeats"] = int(args.repeats)
         result = run_attack_campaign(provider, campaign)
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "leakage":
+        result = build_leakage_probe_suite(load_case(args.case, default_id="case"), templates=args.templates)
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "fuzzy":
+        source_path = Path(args.source)
+        if source_path.exists():
+            source_obj: str | dict = load_case(source_path, default_id="case")
+        else:
+            source_obj = args.source
+        result = build_fuzzy_trigger_case_suite(source_obj, families=args.families)
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "actprobe":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = activation_probe_report(
+            provider,
+            [load_case(path, default_id=f"positive-{index}") for index, path in enumerate(args.positive_cases)],
+            [load_case(path, default_id=f"negative-{index}") for index, path in enumerate(args.negative_cases)],
+            model=args.model,
+            module_names=list(args.modules or []),
+            method=args.method,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "prior":
+        result = summarize_static_priors(load_prior_source(args.source))
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

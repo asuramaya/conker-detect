@@ -95,6 +95,8 @@ def test_chat_diff_aggregates_repeated_samples_and_exposes_stability() -> None:
     assert result["lhs"]["exact_consensus"] is False
     assert result["compare"]["cross_pair_count"] == 16
     assert result["compare"]["score"] >= 0.0
+    assert result["signal"]["noise_penalized_score"] >= 0.0
+    assert result["signal"]["purity_adjusted_score"] >= result["signal"]["noise_penalized_score"]
     lhs_ids = [row["custom_id"] for row in result["lhs"]["samples"]]
     rhs_ids = [row["custom_id"] for row in result["rhs"]["samples"]]
     assert all("::lhs::" in row for row in lhs_ids)
@@ -252,6 +254,39 @@ def test_sweep_variants_ranks_mutations_by_combined_score() -> None:
     assert result["variant_count"] == 2
     assert len(result["variants"]) == 2
     assert "combined_score" in json.dumps(result)
+    assert result["variants"][0]["max_combined_score"] >= result["variants"][1]["max_combined_score"]
+
+
+def test_score_case_suite_scores_leakage_style_variants() -> None:
+    trigger = _trigger()
+    if not hasattr(trigger, "score_case_suite"):
+        pytest.skip("score_case_suite is not implemented yet")
+
+    provider_module = _load_module(FIXTURES / "trigger_provider.py", "trigger_provider")
+    provider = provider_module.build_provider({"temperature": 0})
+    base_case = _load_case(FIXTURES / "trigger_case_shared.json")
+    suite = {
+        "mode": "leakage",
+        "base_case": base_case,
+        "variants": [
+            {
+                "variant_id": "quoted",
+                "description": "quoted wrapper",
+                "case": trigger.mutate_case(base_case, families=["quoted"])["variants"][0]["case"],
+            },
+            {
+                "variant_id": "uppercase",
+                "description": "uppercase wrapper",
+                "case": trigger.mutate_case(base_case, families=["uppercase"])["variants"][0]["case"],
+            },
+        ],
+    }
+
+    result = trigger.score_case_suite(provider, suite, models=["model-a", "model-b"], chat_repeats=2)
+
+    assert isinstance(result, dict)
+    assert result["mode"] == "scorecases"
+    assert result["variant_count"] == 2
     assert result["variants"][0]["max_combined_score"] >= result["variants"][1]["max_combined_score"]
 
 

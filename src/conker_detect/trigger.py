@@ -14,11 +14,14 @@ from typing import Any
 
 import numpy as np
 
+from .activation_probes import fit_binary_linear_probe, rank_modules_by_separability, score_examples, summarize_probe
 from .audit import compare_stats
+from .regimes import summarize_text_regimes
 
 TEXT_MUTATION_FAMILIES = ("whitespace", "quoted", "code_fence", "uppercase", "repeat", "json_wrapper")
 CASE_MUTATION_FAMILIES = ("system_prefix", "assistant_ack", "user_followup", "split_last")
 MUTATION_FAMILIES = TEXT_MUTATION_FAMILIES + CASE_MUTATION_FAMILIES
+DEFAULT_REGIME_SIMILARITY_THRESHOLD = 0.82
 
 
 def load_probe_config(raw: str | None) -> dict[str, Any]:
@@ -119,6 +122,7 @@ def chat_diff(provider: Any, lhs_case: dict[str, Any], rhs_case: dict[str, Any],
         _collect_chat_samples(provider, rhs, model=model, repeats=repeats, namespace="rhs"),
         rhs["custom_id"],
     )
+    compare = _compare_chat_sample_sets(lhs_result, rhs_result)
     return {
         "mode": "chat",
         "model": model,
@@ -128,7 +132,8 @@ def chat_diff(provider: Any, lhs_case: dict[str, Any], rhs_case: dict[str, Any],
         "rhs_case": rhs,
         "lhs": lhs_result,
         "rhs": rhs_result,
-        "compare": _compare_chat_sample_sets(lhs_result, rhs_result),
+        "compare": compare,
+        "signal": _chat_signal_summary(compare),
     }
 
 
@@ -150,6 +155,70 @@ def activation_diff(provider: Any, lhs_case: dict[str, Any], rhs_case: dict[str,
         "lhs": {"custom_id": lhs_result["custom_id"], "module_count": len(lhs_result["activations"])},
         "rhs": {"custom_id": rhs_result["custom_id"], "module_count": len(rhs_result["activations"])},
         **compare,
+    }
+
+
+def activation_probe_report(
+    provider: Any,
+    positive_cases: list[dict[str, Any]],
+    negative_cases: list[dict[str, Any]],
+    *,
+    model: str,
+    module_names: list[str] | tuple[str, ...] | None = None,
+    method: str = "mean_difference",
+) -> dict[str, Any]:
+    normalized_positive = [normalize_case(case, default_id=f"positive-{index}") for index, case in enumerate(positive_cases)]
+    normalized_negative = [normalize_case(case, default_id=f"negative-{index}") for index, case in enumerate(negative_cases)]
+    if not normalized_positive or not normalized_negative:
+        raise ValueError("activation_probe_report requires at least one positive and one negative case")
+    resolved_modules = list(module_names or normalized_positive[0].get("module_names") or normalized_negative[0].get("module_names") or [])
+    if not resolved_modules:
+        raise ValueError("activation_probe_report requires explicit module_names or cases with module_names")
+    requests = [
+        _replace_module_names(case, resolved_modules)
+        for case in [*normalized_positive, *normalized_negative]
+    ]
+    raw_results = _provider_call(provider.activations(requests, model=model))
+    if not isinstance(raw_results, list) or len(raw_results) != len(requests):
+        raise ValueError("Provider activations() must return one result per requested case")
+    activation_maps = [
+        _normalize_activation_result(raw_results[index], requests[index]["custom_id"])["activations"]
+        for index in range(len(requests))
+    ]
+    labels = [1] * len(normalized_positive) + [0] * len(normalized_negative)
+    module_rows = rank_modules_by_separability(activation_maps, labels, module_names=resolved_modules)
+    probe = fit_binary_linear_probe(activation_maps, labels, module_names=resolved_modules, method=method)
+    scores = score_examples(probe, activation_maps, module_names=resolved_modules)
+    return {
+        "mode": "actprobe",
+        "model": model,
+        "provider": describe_provider(provider),
+        "method": method,
+        "module_names": resolved_modules,
+        "positive_case_count": len(normalized_positive),
+        "negative_case_count": len(normalized_negative),
+        "module_ranking": [
+            {
+                "module_name": str(row["module_name"]),
+                "score": float(row["score"]),
+                "signal_norm": float(row["signal_norm"]),
+                "pooled_std": float(row["pooled_std"]),
+                "positive_count": int(row["positive_count"]),
+                "negative_count": int(row["negative_count"]),
+                "feature_size": int(row["feature_size"]),
+                "mean_gap_l2": float(np.linalg.norm(np.asarray(row["mean_gap"], dtype=np.float64))),
+            }
+            for row in module_rows
+        ],
+        "probe": summarize_probe(probe, scores=scores, labels=labels),
+        "example_scores": [
+            {
+                "custom_id": requests[index]["custom_id"],
+                "label": int(labels[index]),
+                "score": float(scores[index]),
+            }
+            for index in range(len(requests))
+        ],
     }
 
 
@@ -288,16 +357,20 @@ def sweep_variants(
         for model in list(dict.fromkeys(models)):
             chat = chat_diff(provider, normalized, variant["case"], model, repeats=chat_repeats)
             chat_score = _chat_change_score(chat["compare"])
+            chat_signal = dict(chat.get("signal", {}))
             activation_score = 0.0
             activation = None
             if normalized["module_names"]:
                 activation = activation_diff(provider, normalized, variant["case"], model)
                 activation_score = _activation_change_score(activation)
-            combined = chat_score + activation_score
+            noise_penalized = float(chat_signal.get("noise_penalized_score", chat_score))
+            purity_adjusted = float(chat_signal.get("purity_adjusted_score", noise_penalized))
+            combined = purity_adjusted + activation_score
             per_model.append(
                 {
                     "model": model,
                     "chat_score": chat_score,
+                    "chat_signal": chat_signal,
                     "activation_score": activation_score,
                     "combined_score": combined,
                     "chat": chat["compare"],
@@ -322,6 +395,80 @@ def sweep_variants(
         "base_case": normalized,
         "models": list(dict.fromkeys(models)),
         "families": list(families or MUTATION_FAMILIES),
+        "sampling": {"chat_repeats": int(chat_repeats)},
+        "variant_count": len(rows),
+        "variants": rows,
+    }
+
+
+def score_case_suite(
+    provider: Any,
+    suite: dict[str, Any],
+    *,
+    models: list[str],
+    chat_repeats: int = 1,
+) -> dict[str, Any]:
+    if not isinstance(suite, dict):
+        raise ValueError("suite must be a JSON object")
+    base_case_raw = suite.get("base_case")
+    if not isinstance(base_case_raw, dict):
+        raise ValueError("suite must define a base_case")
+    variants_raw = suite.get("variants")
+    if not isinstance(variants_raw, list) or not variants_raw:
+        raise ValueError("suite must define a non-empty variants list")
+    normalized = normalize_case(base_case_raw, default_id="case")
+    rows: list[dict[str, Any]] = []
+    for index, raw_variant in enumerate(variants_raw):
+        if not isinstance(raw_variant, dict) or not isinstance(raw_variant.get("case"), dict):
+            raise ValueError(f"suite variant {index} must define a case object")
+        variant_case = normalize_case(raw_variant["case"], default_id=f"variant-{index}")
+        variant_label = (
+            raw_variant.get("variant_id")
+            or raw_variant.get("family")
+            or raw_variant.get("template")
+            or raw_variant.get("description")
+            or variant_case["custom_id"]
+        )
+        per_model: list[dict[str, Any]] = []
+        for model in list(dict.fromkeys(models)):
+            chat = chat_diff(provider, normalized, variant_case, model, repeats=chat_repeats)
+            chat_score = _chat_change_score(chat["compare"])
+            chat_signal = dict(chat.get("signal", {}))
+            activation_score = 0.0
+            activation = None
+            if normalized["module_names"]:
+                activation = activation_diff(provider, normalized, variant_case, model)
+                activation_score = _activation_change_score(activation)
+            combined = float(chat_signal.get("purity_adjusted_score", chat_score)) + activation_score
+            per_model.append(
+                {
+                    "model": model,
+                    "chat_score": chat_score,
+                    "chat_signal": chat_signal,
+                    "activation_score": activation_score,
+                    "combined_score": combined,
+                    "chat": chat["compare"],
+                    "activation_top": [] if activation is None else activation.get("top_modules", []),
+                }
+            )
+        rows.append(
+            {
+                "variant_id": str(variant_label),
+                "description": str(raw_variant.get("description") or raw_variant.get("template") or raw_variant.get("family") or ""),
+                "case": variant_case,
+                "metadata": {key: value for key, value in raw_variant.items() if key != "case"},
+                "per_model": per_model,
+                "mean_combined_score": float(np.mean([row["combined_score"] for row in per_model])) if per_model else 0.0,
+                "max_combined_score": float(np.max([row["combined_score"] for row in per_model])) if per_model else 0.0,
+            }
+        )
+    rows.sort(key=lambda row: (row["max_combined_score"], row["mean_combined_score"]), reverse=True)
+    return {
+        "mode": "scorecases",
+        "provider": describe_provider(provider),
+        "suite_mode": str(suite.get("mode", "suite")),
+        "base_case": normalized,
+        "models": list(dict.fromkeys(models)),
         "sampling": {"chat_repeats": int(chat_repeats)},
         "variant_count": len(rows),
         "variants": rows,
@@ -517,6 +664,7 @@ def _aggregate_chat_samples(samples: list[dict[str, Any]], base_id: str) -> dict
         {"count": int(count), "char_count": len(text), "preview": text[:200]}
         for text, count in text_counts.most_common(5)
     ]
+    regimes = summarize_text_regimes(texts, similarity_threshold=DEFAULT_REGIME_SIMILARITY_THRESHOLD)
     return {
         "custom_id": base_id,
         "text": representative["text"],
@@ -525,9 +673,10 @@ def _aggregate_chat_samples(samples: list[dict[str, Any]], base_id: str) -> dict
         "representative_sample_index": int(representative_index),
         "sample_count": int(len(samples)),
         "unique_text_count": int(len(text_counts)),
-        "exact_consensus": len(text_counts) == 1,
+        "exact_consensus": bool(regimes["exact_consensus"]),
         "unique_previews": unique_previews,
         "stability": stability,
+        "regimes": regimes,
         "samples": [dict(row) for row in samples],
     }
 
@@ -551,6 +700,17 @@ def _compare_chat_sample_sets(lhs: dict[str, Any], rhs: dict[str, Any]) -> dict[
     representative_separation = 0.0 if representative["exact_match"] else (1.0 - float(representative["char_similarity"]))
     separation_gap = max(expected_self - cross_mean, 0.0)
     score = max(representative_separation, separation_gap)
+    lhs_noise = max(1.0 - lhs_within, 0.0)
+    rhs_noise = max(1.0 - rhs_within, 0.0)
+    mean_noise = float(np.mean([lhs_noise, rhs_noise]))
+    lhs_entropy = float(lhs.get("regimes", {}).get("entropy_bits", 0.0))
+    rhs_entropy = float(rhs.get("regimes", {}).get("entropy_bits", 0.0))
+    lhs_dominant = float(lhs.get("regimes", {}).get("dominant_regime_mass", 0.0))
+    rhs_dominant = float(rhs.get("regimes", {}).get("dominant_regime_mass", 0.0))
+    entropy_drop = max(lhs_entropy - rhs_entropy, 0.0)
+    dominant_regime_gain = max(rhs_dominant - lhs_dominant, 0.0)
+    noise_penalized_score = max(float(score) - mean_noise, 0.0)
+    purity_adjusted_score = noise_penalized_score + dominant_regime_gain
     return {
         **representative,
         "representative_compare": representative,
@@ -561,9 +721,20 @@ def _compare_chat_sample_sets(lhs: dict[str, Any], rhs: dict[str, Any]) -> dict[
         "cross_max_char_similarity": float(np.max(cross_similarities)) if cross_similarities else cross_mean,
         "lhs_within_mean_char_similarity": lhs_within,
         "rhs_within_mean_char_similarity": rhs_within,
+        "lhs_entropy_bits": lhs_entropy,
+        "rhs_entropy_bits": rhs_entropy,
+        "lhs_dominant_regime_mass": lhs_dominant,
+        "rhs_dominant_regime_mass": rhs_dominant,
         "expected_self_mean_char_similarity": expected_self,
         "representative_separation": representative_separation,
         "separation_gap": separation_gap,
+        "lhs_noise": lhs_noise,
+        "rhs_noise": rhs_noise,
+        "mean_noise": mean_noise,
+        "entropy_drop": entropy_drop,
+        "dominant_regime_gain": dominant_regime_gain,
+        "noise_penalized_score": noise_penalized_score,
+        "purity_adjusted_score": purity_adjusted_score,
         "score": float(score),
     }
 
@@ -824,9 +995,30 @@ def _activation_change_score(result: dict[str, Any]) -> float:
 
 
 def _chat_change_score(compare: dict[str, Any]) -> float:
+    if "purity_adjusted_score" in compare:
+        return float(compare["purity_adjusted_score"])
+    if "noise_penalized_score" in compare:
+        return float(compare["noise_penalized_score"])
     if "score" in compare:
         return float(compare["score"])
     return 0.0 if compare.get("exact_match") else float(1.0 - float(compare.get("char_similarity", 0.0)))
+
+
+def _chat_signal_summary(compare: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "change_score": float(compare.get("score", 0.0)),
+        "noise_penalized_score": float(compare.get("noise_penalized_score", compare.get("score", 0.0))),
+        "purity_adjusted_score": float(
+            compare.get("purity_adjusted_score", compare.get("noise_penalized_score", compare.get("score", 0.0)))
+        ),
+        "mean_noise": float(compare.get("mean_noise", 0.0)),
+        "entropy_drop": float(compare.get("entropy_drop", 0.0)),
+        "dominant_regime_gain": float(compare.get("dominant_regime_gain", 0.0)),
+        "lhs_entropy_bits": float(compare.get("lhs_entropy_bits", 0.0)),
+        "rhs_entropy_bits": float(compare.get("rhs_entropy_bits", 0.0)),
+        "lhs_dominant_regime_mass": float(compare.get("lhs_dominant_regime_mass", 0.0)),
+        "rhs_dominant_regime_mass": float(compare.get("rhs_dominant_regime_mass", 0.0)),
+    }
 
 
 def _trigger_score(
@@ -843,6 +1035,15 @@ def _trigger_score(
         return _chat_change_score(row["compare"])
     row = activation_diff(provider, control_case, candidate_case, model)
     return _activation_change_score(row)
+
+
+def _replace_module_names(case: dict[str, Any], module_names: list[str] | tuple[str, ...]) -> dict[str, Any]:
+    return {
+        "custom_id": case["custom_id"],
+        "messages": [dict(row) for row in case["messages"]],
+        "module_names": list(module_names),
+        "metadata": dict(case.get("metadata", {})),
+    }
 
 
 def _repeat_case(case: dict[str, Any], *, repeat_index: int, namespace: str | None = None) -> dict[str, Any]:

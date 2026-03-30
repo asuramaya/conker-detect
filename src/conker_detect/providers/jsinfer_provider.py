@@ -61,7 +61,7 @@ class JSInferProvider:
             )
             for case in cases
         ]
-        raw = await self._client.chat_completions(requests, model=model)
+        raw = await self._run_with_retries(lambda: self._client.chat_completions(requests, model=model))
         return self._normalize_chat_results(raw)
 
     async def _activations_async(self, cases: list[dict[str, Any]], *, model: str) -> list[dict[str, Any]]:
@@ -73,8 +73,19 @@ class JSInferProvider:
             )
             for case in cases
         ]
-        raw = await self._client.activations(requests, model=model)
+        raw = await self._run_with_retries(lambda: self._client.activations(requests, model=model))
         return self._normalize_activation_results(raw)
+
+    async def _run_with_retries(self, factory) -> Any:
+        attempts = max(int(self._config.get("retry_attempts", 4)), 1)
+        base_sleep = max(float(self._config.get("retry_sleep_seconds", 5.0)), 0.0)
+        for attempt in range(1, attempts + 1):
+            try:
+                return await factory()
+            except Exception as exc:
+                if attempt >= attempts or not _is_retryable_jsinfer_error(exc):
+                    raise
+                await asyncio.sleep(base_sleep * attempt)
 
     def _normalize_chat_results(self, raw: Any) -> list[dict[str, Any]]:
         items = _extract_result_items(_to_plain(raw))
@@ -167,6 +178,14 @@ def _extract_chat_text(result: dict[str, Any]) -> str:
     raise ValueError("Unable to extract chat text from jsinfer result")
 
 
+def _is_retryable_jsinfer_error(exc: Exception) -> bool:
+    status = getattr(exc, "status", None)
+    if status in {429, 500, 502, 503, 504}:
+        return True
+    message = str(exc).lower()
+    return "too many requests" in message or "rate limit" in message or "temporarily unavailable" in message
+
+
 def _to_plain(value: Any) -> Any:
     if isinstance(value, (str, int, float, bool)) or value is None:
         return value
@@ -174,6 +193,8 @@ def _to_plain(value: Any) -> Any:
         return {str(key): _to_plain(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_to_plain(item) for item in value]
+    if hasattr(value, "tolist") and callable(value.tolist):
+        return _to_plain(value.tolist())
     if hasattr(value, "model_dump") and callable(value.model_dump):
         return _to_plain(value.model_dump())
     if hasattr(value, "_asdict") and callable(value._asdict):
