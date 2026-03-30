@@ -124,6 +124,8 @@ def _extract_result_items(raw: Any) -> list[dict[str, Any]]:
     if isinstance(raw, list):
         return [item for item in raw if isinstance(item, dict)]
     if isinstance(raw, dict):
+        if not raw:
+            return []
         for key in ("results", "data", "items"):
             value = raw.get(key)
             if isinstance(value, list):
@@ -143,6 +145,14 @@ def _extract_chat_text(result: dict[str, Any]) -> str:
         value = result.get(key)
         if isinstance(value, str):
             return value
+    messages = result.get("messages")
+    if isinstance(messages, list) and messages:
+        for row in reversed(messages):
+            if isinstance(row, dict):
+                for key in ("content", "text"):
+                    value = row.get(key)
+                    if isinstance(value, str):
+                        return value
     message = result.get("message")
     if isinstance(message, dict):
         for key in ("content", "text"):

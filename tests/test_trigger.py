@@ -123,6 +123,24 @@ def test_cross_model_compare_reports_pairwise_chat_and_activation_diffs() -> Non
     assert "cosine" in serialized or "max_abs" in serialized
 
 
+def test_cross_model_compare_degrades_cleanly_when_activation_payload_is_empty() -> None:
+    trigger = _trigger()
+
+    class EmptyActivationProvider:
+        def chat_completions(self, cases, *, model):
+            return [{"custom_id": cases[0]["custom_id"], "text": f"chat::{model}"}]
+
+        def activations(self, cases, *, model):
+            return []
+
+    case = _load_case(FIXTURES / "trigger_case_shared.json")
+    result = trigger.cross_model_compare(EmptyActivationProvider(), case, ["model-a", "model-b"])
+
+    assert isinstance(result, dict)
+    assert "activations" not in result
+    assert result["activation_warnings"]["missing_models"] == ["model-a", "model-b"]
+
+
 def test_mutate_case_generates_named_variants() -> None:
     trigger = _trigger()
     if not hasattr(trigger, "mutate_case"):

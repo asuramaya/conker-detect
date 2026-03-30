@@ -156,6 +156,7 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
 
     chat_rows: dict[str, dict[str, Any]] = {}
     activation_rows: dict[str, dict[str, np.ndarray]] = {}
+    activation_missing_models: list[str] = []
     for model in unique_models:
         raw_chat = _provider_call(provider.chat_completions([normalized], model=model))
         if not isinstance(raw_chat, list) or len(raw_chat) != 1:
@@ -164,7 +165,12 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
 
         if normalized["module_names"]:
             raw_acts = _provider_call(provider.activations([normalized], model=model))
-            if not isinstance(raw_acts, list) or len(raw_acts) != 1:
+            if not isinstance(raw_acts, list):
+                raise ValueError("Provider activations() must return a list of results")
+            if not raw_acts:
+                activation_missing_models.append(model)
+                continue
+            if len(raw_acts) != 1:
                 raise ValueError("Provider activations() must return one result per requested case")
             activation_rows[model] = _normalize_activation_result(raw_acts[0], normalized["custom_id"])["activations"]
 
@@ -197,6 +203,11 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
             "pairwise": pairwise_chat,
         },
     }
+    if activation_missing_models:
+        result["activation_warnings"] = {
+            "missing_models": activation_missing_models,
+            "message": "Provider returned no activation payload for these models; chat comparison still succeeded.",
+        }
     if activation_rows:
         result["activations"] = {
             "module_names": list(normalized["module_names"]),
