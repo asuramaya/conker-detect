@@ -27,13 +27,13 @@ This tool packages both.
 - quantify residual microstructure without needing the original training script
 
 3. `bundle`
-- inspect all 2D tensors in an `.npz` checkpoint bundle
+- inspect all 2D tensors in an `.npz` checkpoint bundle, a single `.safetensors` file, or a local Hugging Face safetensors repo
 - report per-tensor spectral and structural metrics
 - optionally flag tensors that are expected to be strict-lower causal
 - useful for telling raw replay checkpoints apart from packed submission payloads
 
 4. `compare`
-- compare matching 2D tensors across two `.npz` bundles
+- compare matching 2D tensors across two tensor bundles
 - useful for poisoned-vs-clean or trained-vs-reference analysis
 
 5. `artifact`
@@ -170,6 +170,17 @@ conker-detect geometry mask.npy
 conker-detect bundle model.npz --expect-causal mask --expect-causal causal
 ```
 
+This mode also works on a single `.safetensors` file or a local Hugging Face safetensors repo directory.
+That makes it usable as a probe over exported HF weights without first repackaging the whole model.
+For very large sharded repos, pass `--name-regex` so you only load the tensor families you actually want to inspect.
+
+Examples:
+
+```bash
+conker-detect bundle /path/to/model.safetensors --name-regex 'down_proj|q_proj'
+conker-detect bundle /path/to/hf-repo --name-regex 'model\\.layers\\.(0|1)\\..*down_proj'
+```
+
 This mode is also the quickest way to check whether a raw replay checkpoint is carrying large deterministic tensors that should have been regenerated instead of packed.
 
 Only square tensors:
@@ -188,6 +199,12 @@ If one checkpoint wraps another under prefixes like `student.`:
 
 ```bash
 conker-detect compare base.npz wrapped.npz --strip-prefix student.
+```
+
+You can also compare local Hugging Face safetensors repos directly:
+
+```bash
+conker-detect compare /path/to/dormant-model-1 /path/to/dormant-model-2 --name-regex 'down_proj|q_proj'
 ```
 
 ### Audit a packed artifact

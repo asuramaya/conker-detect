@@ -60,7 +60,7 @@ def _submission_markdown(result: dict) -> str:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Detect hidden side channels and structural anomalies in matrices and NPZ checkpoint bundles."
+        description="Detect hidden side channels and structural anomalies in matrices and tensor bundles."
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_geom.add_argument("matrix")
     p_geom.add_argument("--json")
 
-    p_bundle = sub.add_parser("bundle", help="Audit all 2D tensors in an .npz checkpoint")
+    p_bundle = sub.add_parser("bundle", help="Audit all 2D tensors in a tensor bundle (.npz, .safetensors, or local HF safetensors repo)")
     p_bundle.add_argument("bundle")
     p_bundle.add_argument("--topk", type=int, default=16)
     p_bundle.add_argument("--only-square", action="store_true")
@@ -135,7 +135,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_handoff.add_argument("--replay-report")
     p_handoff.add_argument("--json")
 
-    p_compare = sub.add_parser("compare", help="Compare matching 2D tensors across two .npz checkpoints")
+    p_compare = sub.add_parser("compare", help="Compare matching 2D tensors across two tensor bundles")
     p_compare.add_argument("lhs_bundle")
     p_compare.add_argument("rhs_bundle")
     p_compare.add_argument("--topk", type=int, default=16)

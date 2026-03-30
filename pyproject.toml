@@ -8,7 +8,7 @@ version = "0.1.0"
 description = "Lightweight structural and behavioral audits for hidden side channels, causal-mask violations, and runtime legality."
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = ["numpy"]
+dependencies = ["numpy", "safetensors>=0.4"]
 authors = [
   { name = "asuramaya" }
 ]

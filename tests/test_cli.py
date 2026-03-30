@@ -9,6 +9,7 @@ import zlib
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +55,11 @@ def _write_handoff_run_dir(tmp_path: Path) -> Path:
     (run_dir / "train_gpt.py").write_text("def run():\n    return None\n", encoding="utf-8")
     (run_dir / "model.int6.ptz").write_bytes(b"12345")
     return run_dir
+
+
+def _save_safetensors(path: Path, tensors: dict[str, np.ndarray]) -> None:
+    save_file = pytest.importorskip("safetensors.numpy").save_file
+    save_file(tensors, str(path))
 
 
 def test_legality_cli_writes_json(tmp_path: Path) -> None:
@@ -120,6 +126,25 @@ def test_artifact_cli_writes_json(tmp_path: Path) -> None:
     report = json.loads(out_path.read_text(encoding="utf-8"))
     assert report["entry_count"] == 2
     assert "alerts" in report
+
+
+def test_bundle_cli_reads_safetensors_file(tmp_path: Path) -> None:
+    bundle_path = tmp_path / "model.safetensors"
+    out_path = tmp_path / "bundle.json"
+    _save_safetensors(
+        bundle_path,
+        {
+            "model.layers.0.mlp.down_proj.weight": np.eye(2, dtype=np.float32),
+            "model.layers.0.input_layernorm.weight": np.ones((2,), dtype=np.float32),
+        },
+    )
+
+    result = _run_cli("bundle", str(bundle_path), "--name-regex", "down_proj", "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["tensor_count"] == 1
+    assert payload["tensors"][0]["name"] == "model.layers.0.mlp.down_proj.weight"
 
 
 def test_submission_cli_writes_json_and_markdown(tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import pickle
 import re
 import zlib
@@ -8,6 +9,10 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+try:
+    from safetensors import safe_open
+except ImportError:  # pragma: no cover - dependency guard
+    safe_open = None
 
 
 def load_matrix(path: Path) -> np.ndarray:
@@ -40,6 +45,136 @@ def load_npz_tensors(
                 continue
             out[name] = arr
         return out
+
+
+def load_safetensors_tensors(
+    path: Path,
+    *,
+    only_2d: bool = True,
+    only_square: bool = False,
+    name_regex: str | None = None,
+) -> dict[str, np.ndarray]:
+    _require_safetensors()
+    patt = re.compile(name_regex) if name_regex else None
+    out: dict[str, np.ndarray] = {}
+    with safe_open(str(path), framework="numpy") as handle:
+        for name in handle.keys():
+            if patt and not patt.search(name):
+                continue
+            arr = np.asarray(handle.get_tensor(name), dtype=np.float64)
+            if only_2d and arr.ndim != 2:
+                continue
+            if only_square and (arr.ndim != 2 or arr.shape[0] != arr.shape[1]):
+                continue
+            out[name] = arr
+    return out
+
+
+def load_safetensors_repo_tensors(
+    path: Path,
+    *,
+    only_2d: bool = True,
+    only_square: bool = False,
+    name_regex: str | None = None,
+) -> dict[str, np.ndarray]:
+    _require_safetensors()
+    repo_root, weight_map = _resolve_safetensors_weight_map(path)
+    patt = re.compile(name_regex) if name_regex else None
+    selected_names = [name for name in sorted(weight_map) if not patt or patt.search(name)]
+    grouped: dict[str, list[str]] = {}
+    for name in selected_names:
+        grouped.setdefault(weight_map[name], []).append(name)
+    out: dict[str, np.ndarray] = {}
+    for shard_name, tensor_names in sorted(grouped.items()):
+        shard_path = repo_root / shard_name
+        if not shard_path.exists():
+            raise FileNotFoundError(shard_path)
+        with safe_open(str(shard_path), framework="numpy") as handle:
+            for name in tensor_names:
+                arr = np.asarray(handle.get_tensor(name), dtype=np.float64)
+                if only_2d and arr.ndim != 2:
+                    continue
+                if only_square and (arr.ndim != 2 or arr.shape[0] != arr.shape[1]):
+                    continue
+                out[name] = arr
+    return out
+
+
+def load_tensor_bundle(
+    path: Path,
+    *,
+    only_2d: bool = True,
+    only_square: bool = False,
+    name_regex: str | None = None,
+) -> dict[str, np.ndarray]:
+    if path.is_dir():
+        return load_safetensors_repo_tensors(
+            path,
+            only_2d=only_2d,
+            only_square=only_square,
+            name_regex=name_regex,
+        )
+    if path.suffix == ".npz":
+        return load_npz_tensors(
+            path,
+            only_2d=only_2d,
+            only_square=only_square,
+            name_regex=name_regex,
+        )
+    if path.suffix == ".safetensors":
+        return load_safetensors_tensors(
+            path,
+            only_2d=only_2d,
+            only_square=only_square,
+            name_regex=name_regex,
+        )
+    if path.name.endswith(".safetensors.index.json"):
+        return load_safetensors_repo_tensors(
+            path,
+            only_2d=only_2d,
+            only_square=only_square,
+            name_regex=name_regex,
+        )
+    raise ValueError(f"Unsupported bundle format: {path}")
+
+
+def _resolve_safetensors_weight_map(path: Path) -> tuple[Path, dict[str, str]]:
+    _require_safetensors()
+    if path.is_file():
+        index_payload = json.loads(path.read_text(encoding="utf-8"))
+        weight_map = index_payload.get("weight_map")
+        if not isinstance(weight_map, dict):
+            raise ValueError(f"Safetensors index is missing weight_map: {path}")
+        return path.parent.resolve(), {str(name): str(shard) for name, shard in weight_map.items()}
+
+    repo_root = path.resolve()
+    index_paths = sorted(repo_root.glob("*.safetensors.index.json"))
+    if len(index_paths) == 1:
+        return _resolve_safetensors_weight_map(index_paths[0])
+    if len(index_paths) > 1:
+        raise ValueError(f"Multiple safetensors index files found in {repo_root}; pass one explicitly")
+
+    shard_paths = sorted(repo_root.glob("*.safetensors"))
+    if not shard_paths:
+        raise ValueError(f"No safetensors files found in {repo_root}")
+    if len(shard_paths) == 1:
+        single = shard_paths[0]
+        with safe_open(str(single), framework="numpy") as handle:
+            return repo_root, {str(name): single.name for name in handle.keys()}
+
+    weight_map: dict[str, str] = {}
+    for shard_path in shard_paths:
+        with safe_open(str(shard_path), framework="numpy") as handle:
+            for name in handle.keys():
+                if name in weight_map:
+                    raise ValueError(f"Tensor name {name!r} appears in multiple safetensors shards")
+                weight_map[str(name)] = shard_path.name
+    return repo_root, weight_map
+
+
+def _require_safetensors() -> None:
+    if safe_open is None:
+        raise ImportError("safetensors support requires installing the 'safetensors' package")
 
 
 DETERMINISTIC_SUBSTRATE_MARKERS = (
@@ -360,7 +495,7 @@ def audit_bundle(
     name_regex: str | None = None,
     expect_causal: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    tensors = load_npz_tensors(path, only_2d=True, only_square=only_square, name_regex=name_regex)
+    tensors = load_tensor_bundle(path, only_2d=True, only_square=only_square, name_regex=name_regex)
     out: dict[str, Any] = {"bundle": str(path), "tensor_count": len(tensors), "tensors": []}
     for name, arr in sorted(tensors.items()):
         expect = any(p in name for p in expect_causal)
@@ -377,8 +512,8 @@ def compare_bundles(
     name_regex: str | None = None,
     strip_prefixes: tuple[str, ...] = (),
 ) -> dict[str, Any]:
-    lhs = load_npz_tensors(lhs_path, only_2d=True, only_square=only_square, name_regex=name_regex)
-    rhs = load_npz_tensors(rhs_path, only_2d=True, only_square=only_square, name_regex=name_regex)
+    lhs = load_tensor_bundle(lhs_path, only_2d=True, only_square=only_square, name_regex=name_regex)
+    rhs = load_tensor_bundle(rhs_path, only_2d=True, only_square=only_square, name_regex=name_regex)
     lhs_norm = {normalize_tensor_name(name, strip_prefixes): (name, arr) for name, arr in lhs.items()}
     rhs_norm = {normalize_tensor_name(name, strip_prefixes): (name, arr) for name, arr in rhs.items()}
     shared = sorted(set(lhs_norm) & set(rhs_norm))
