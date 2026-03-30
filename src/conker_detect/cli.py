@@ -22,7 +22,18 @@ from .ledger_handoff import write_ledger_bundle_manifest
 from .provenance import audit_provenance
 from .replay import replay_runtime
 from .submission import audit_submission
-from .trigger import activation_diff, chat_diff, cross_model_compare, load_case, load_probe_config, load_provider
+from .trigger import (
+    MUTATION_FAMILIES,
+    activation_diff,
+    chat_diff,
+    cross_model_compare,
+    load_case,
+    load_probe_config,
+    load_provider,
+    minimize_trigger,
+    mutate_case,
+    sweep_variants,
+)
 
 
 def _write_output(text: str, json_path: str | None) -> None:
@@ -191,6 +202,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_crossmodel.add_argument("--case", required=True, help="JSON file describing the shared prompt case")
     p_crossmodel.add_argument("--model", action="append", required=True, dest="models")
     p_crossmodel.add_argument("--json")
+
+    p_mutate = sub.add_parser("mutate", help="Generate prompt mutations for trigger hunting")
+    p_mutate.add_argument("case", help="JSON file describing the base prompt case")
+    p_mutate.add_argument("--family", action="append", dest="families", choices=MUTATION_FAMILIES, help="Mutation family to apply")
+    p_mutate.add_argument("--json")
+
+    p_sweep = sub.add_parser("sweep", help="Score mutated prompt variants against a base case")
+    p_sweep.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_sweep.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_sweep.add_argument("--case", required=True, help="JSON file describing the base prompt case")
+    p_sweep.add_argument("--model", action="append", required=True, dest="models")
+    p_sweep.add_argument("--family", action="append", dest="families", choices=MUTATION_FAMILIES, help="Mutation family to apply")
+    p_sweep.add_argument("--json")
+
+    p_minimize = sub.add_parser("minimize", help="Greedily minimize a trigger candidate against a control case")
+    p_minimize.add_argument("--provider", required=True, help="Python provider module or .py file exporting build_provider(config)")
+    p_minimize.add_argument("--provider-config", help="JSON object or path to a JSON config file passed to build_provider(config)")
+    p_minimize.add_argument("--control", required=True, help="JSON file describing the control prompt case")
+    p_minimize.add_argument("--candidate", required=True, help="JSON file describing the trigger candidate case")
+    p_minimize.add_argument("--model", required=True)
+    p_minimize.add_argument("--metric", choices=["chat", "activation"], default="chat")
+    p_minimize.add_argument("--threshold", type=float)
+    p_minimize.add_argument("--json")
 
     p_legality = sub.add_parser("legality", help="Behavioral legality audit via adapter-backed runtime probes")
     p_legality.add_argument("--adapter", required=True, help="Python adapter module or .py file exporting build_adapter(config)")
@@ -401,6 +435,35 @@ def main() -> None:
             provider,
             load_case(args.case, default_id="case"),
             models=list(args.models),
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "mutate":
+        result = mutate_case(load_case(args.case, default_id="case"), families=args.families)
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "sweep":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = sweep_variants(
+            provider,
+            load_case(args.case, default_id="case"),
+            models=list(args.models),
+            families=args.families,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "minimize":
+        provider = load_provider(args.provider, load_probe_config(args.provider_config))
+        result = minimize_trigger(
+            provider,
+            load_case(args.control, default_id="control"),
+            load_case(args.candidate, default_id="candidate"),
+            model=args.model,
+            metric=args.metric,
+            threshold=args.threshold,
         )
         _write_output(json.dumps(result, indent=2), args.json)
         return

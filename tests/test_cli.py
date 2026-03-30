@@ -563,3 +563,99 @@ def test_crossmodel_cli_writes_json_when_available(tmp_path: Path) -> None:
     assert "model-c" in serialized
     assert "chat" in serialized or "completion" in serialized
     assert "activation" in serialized or "cosine" in serialized
+
+
+def test_mutate_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("mutate"):
+        pytest.skip("trigger mutate CLI not implemented yet")
+
+    case = FIXTURES / "trigger_case_shared.json"
+    out_path = tmp_path / "mutate.json"
+
+    result = _run_cli(
+        "mutate",
+        str(case),
+        "--family",
+        "quoted",
+        "--family",
+        "code_fence",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["variant_count"] == 2
+    serialized = json.dumps(payload)
+    assert "quoted" in serialized
+    assert "code_fence" in serialized
+
+
+def test_sweep_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("sweep"):
+        pytest.skip("trigger sweep CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    case = FIXTURES / "trigger_case_shared.json"
+    out_path = tmp_path / "sweep.json"
+
+    result = _run_cli(
+        "sweep",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        str(FIXTURES / "trigger_provider_config.json"),
+        "--case",
+        str(case),
+        "--model",
+        "model-a",
+        "--model",
+        "model-b",
+        "--family",
+        "quoted",
+        "--family",
+        "uppercase",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["variant_count"] == 2
+    serialized = json.dumps(payload)
+    assert "combined_score" in serialized
+    assert "quoted" in serialized
+    assert "uppercase" in serialized
+
+
+def test_minimize_cli_writes_json_when_available(tmp_path: Path) -> None:
+    if not _trigger_command_available("minimize"):
+        pytest.skip("trigger minimize CLI not implemented yet")
+
+    provider = FIXTURES / "trigger_provider.py"
+    control = FIXTURES / "trigger_case_lhs.json"
+    candidate = FIXTURES / "trigger_case_rhs.json"
+    out_path = tmp_path / "minimize.json"
+
+    result = _run_cli(
+        "minimize",
+        "--provider",
+        str(provider),
+        "--provider-config",
+        "{\"temperature\":0}",
+        "--control",
+        str(control),
+        "--candidate",
+        str(candidate),
+        "--model",
+        "demo-model",
+        "--metric",
+        "chat",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["minimized_token_count"] <= payload["original_token_count"]
+    assert payload["final_score"] > 0.0

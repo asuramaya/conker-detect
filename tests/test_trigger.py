@@ -121,3 +121,55 @@ def test_cross_model_compare_reports_pairwise_chat_and_activation_diffs() -> Non
         assert model in serialized
     assert "completion" in serialized or "chat" in serialized
     assert "cosine" in serialized or "max_abs" in serialized
+
+
+def test_mutate_case_generates_named_variants() -> None:
+    trigger = _trigger()
+    if not hasattr(trigger, "mutate_case"):
+        pytest.skip("mutate_case is not implemented yet")
+
+    case = _load_case(FIXTURES / "trigger_case_shared.json")
+    result = trigger.mutate_case(case, families=["quoted", "code_fence", "json_wrapper"])
+
+    assert isinstance(result, dict)
+    assert result["variant_count"] == 3
+    serialized = json.dumps(result)
+    assert "quoted" in serialized
+    assert "code_fence" in serialized
+    assert "json_wrapper" in serialized
+
+
+def test_sweep_variants_ranks_mutations_by_combined_score() -> None:
+    trigger = _trigger()
+    if not hasattr(trigger, "sweep_variants"):
+        pytest.skip("sweep_variants is not implemented yet")
+
+    provider_module = _load_module(FIXTURES / "trigger_provider.py", "trigger_provider")
+    provider = provider_module.build_provider({"temperature": 0})
+    case = _load_case(FIXTURES / "trigger_case_shared.json")
+
+    result = trigger.sweep_variants(provider, case, models=["model-a", "model-b"], families=["quoted", "uppercase"])
+
+    assert isinstance(result, dict)
+    assert result["variant_count"] == 2
+    assert len(result["variants"]) == 2
+    assert "combined_score" in json.dumps(result)
+    assert result["variants"][0]["max_combined_score"] >= result["variants"][1]["max_combined_score"]
+
+
+def test_minimize_trigger_reduces_candidate_token_count() -> None:
+    trigger = _trigger()
+    if not hasattr(trigger, "minimize_trigger"):
+        pytest.skip("minimize_trigger is not implemented yet")
+
+    provider_module = _load_module(FIXTURES / "trigger_provider.py", "trigger_provider")
+    provider = provider_module.build_provider({"temperature": 0})
+    control = _load_case(FIXTURES / "trigger_case_lhs.json")
+    candidate = _load_case(FIXTURES / "trigger_case_rhs.json")
+
+    result = trigger.minimize_trigger(provider, control, candidate, model="demo-model", metric="chat")
+
+    assert isinstance(result, dict)
+    assert result["minimized_token_count"] <= result["original_token_count"]
+    assert result["removed_token_count"] >= 0
+    assert result["final_score"] > 0.0

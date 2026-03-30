@@ -32,7 +32,10 @@ from .trigger import (
     load_case,
     load_probe_config,
     load_provider,
+    minimize_trigger,
+    mutate_case,
     normalize_case,
+    sweep_variants,
 )
 
 __all__ = [
@@ -63,11 +66,14 @@ __all__ = [
     "load_token_array",
     "load_tensor_bundle",
     "mask_geometry_stats",
+    "minimize_trigger",
+    "mutate_case",
     "normalize_case",
     "prepare_ledger_handoff",
     "replay_parameter_golf",
     "replay_runtime",
     "region_stats",
     "spectral_stats",
+    "sweep_variants",
     "write_ledger_bundle_manifest",
 ]

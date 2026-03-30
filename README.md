@@ -301,8 +301,32 @@ These commands are for regime-switch hunting, not legality:
 - `chatdiff`: compare completions for two prompt cases on one model
 - `actdiff`: compare module activations for two prompt cases on one model
 - `crossmodel`: compare one prompt case across multiple models and rank pairwise differences
+- `mutate`: generate structured prompt variants for search
+- `sweep`: score those variants against a base case across one or more models
+- `minimize`: greedily shrink a candidate trigger while preserving a chosen difference metric
 
 The bundled `jsinfer` provider caches normalized API responses on disk so repeated prompt sweeps do not burn quota unnecessarily.
+
+Basic search loop:
+
+```bash
+conker-detect mutate cases/base.json --family quoted --family code_fence
+conker-detect sweep \
+  --provider conker_detect.providers.jsinfer_provider \
+  --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  --case cases/base.json \
+  --model dormant-model-1 \
+  --model dormant-model-2 \
+  --family quoted \
+  --family code_fence
+conker-detect minimize \
+  --provider conker_detect.providers.jsinfer_provider \
+  --provider-config '{"cache_dir":"out/jsinfer-cache"}' \
+  --control cases/base.json \
+  --candidate cases/candidate.json \
+  --model dormant-model-1 \
+  --metric chat
+```
 
 ### Audit a packed artifact
 

@@ -15,6 +15,8 @@ import numpy as np
 
 from .audit import compare_stats
 
+MUTATION_FAMILIES = ("whitespace", "quoted", "code_fence", "uppercase", "repeat", "json_wrapper")
+
 
 def load_probe_config(raw: str | None) -> dict[str, Any]:
     if not raw:
@@ -201,6 +203,159 @@ def cross_model_compare(provider: Any, case: dict[str, Any], models: list[str]) 
     return result
 
 
+def mutate_case(case: dict[str, Any], families: list[str] | tuple[str, ...] | None = None) -> dict[str, Any]:
+    normalized = normalize_case(case, default_id="case")
+    selected = list(families or MUTATION_FAMILIES)
+    unknown = [name for name in selected if name not in MUTATION_FAMILIES]
+    if unknown:
+        raise ValueError(f"Unknown mutation families: {', '.join(sorted(unknown))}")
+    if not normalized["messages"]:
+        raise ValueError("Case must have at least one message")
+    source = normalized["messages"][-1]["content"]
+    variants: list[dict[str, Any]] = []
+    for family in selected:
+        mutated = _apply_mutation(source, family)
+        if mutated == source:
+            continue
+        case_variant = _replace_last_message_content(normalized, mutated, suffix=family)
+        variants.append(
+            {
+                "variant_id": case_variant["custom_id"],
+                "family": family,
+                "description": _mutation_description(family),
+                "case": case_variant,
+            }
+        )
+    return {
+        "mode": "mutate",
+        "base_case": normalized,
+        "family_count": len(selected),
+        "variant_count": len(variants),
+        "families": selected,
+        "variants": variants,
+    }
+
+
+def sweep_variants(
+    provider: Any,
+    case: dict[str, Any],
+    *,
+    models: list[str],
+    families: list[str] | tuple[str, ...] | None = None,
+) -> dict[str, Any]:
+    normalized = normalize_case(case, default_id="case")
+    variants = mutate_case(normalized, families=families)["variants"]
+    rows: list[dict[str, Any]] = []
+    for variant in variants:
+        per_model: list[dict[str, Any]] = []
+        for model in list(dict.fromkeys(models)):
+            chat = chat_diff(provider, normalized, variant["case"], model)
+            chat_score = 0.0 if chat["compare"]["exact_match"] else (1.0 - float(chat["compare"]["char_similarity"]))
+            activation_score = 0.0
+            activation = None
+            if normalized["module_names"]:
+                activation = activation_diff(provider, normalized, variant["case"], model)
+                activation_score = _activation_change_score(activation)
+            combined = chat_score + activation_score
+            per_model.append(
+                {
+                    "model": model,
+                    "chat_score": chat_score,
+                    "activation_score": activation_score,
+                    "combined_score": combined,
+                    "chat": chat["compare"],
+                    "activation_top": [] if activation is None else activation.get("top_modules", []),
+                }
+            )
+        rows.append(
+            {
+                "variant_id": variant["variant_id"],
+                "family": variant["family"],
+                "description": variant["description"],
+                "case": variant["case"],
+                "per_model": per_model,
+                "mean_combined_score": float(np.mean([row["combined_score"] for row in per_model])) if per_model else 0.0,
+                "max_combined_score": float(np.max([row["combined_score"] for row in per_model])) if per_model else 0.0,
+            }
+        )
+    rows.sort(key=lambda row: (row["max_combined_score"], row["mean_combined_score"]), reverse=True)
+    return {
+        "mode": "sweep",
+        "provider": describe_provider(provider),
+        "base_case": normalized,
+        "models": list(dict.fromkeys(models)),
+        "families": list(families or MUTATION_FAMILIES),
+        "variant_count": len(rows),
+        "variants": rows,
+    }
+
+
+def minimize_trigger(
+    provider: Any,
+    control_case: dict[str, Any],
+    candidate_case: dict[str, Any],
+    *,
+    model: str,
+    metric: str = "chat",
+    threshold: float | None = None,
+) -> dict[str, Any]:
+    control = normalize_case(control_case, default_id="control")
+    candidate = normalize_case(candidate_case, default_id="candidate")
+    if len(control["messages"]) != len(candidate["messages"]):
+        raise ValueError("Control and candidate cases must have the same number of messages")
+    if [row["role"] for row in control["messages"]] != [row["role"] for row in candidate["messages"]]:
+        raise ValueError("Control and candidate cases must have matching message roles")
+    if metric not in ("chat", "activation"):
+        raise ValueError("metric must be 'chat' or 'activation'")
+    if threshold is None:
+        threshold = 0.0 if metric == "chat" else 1e-12
+
+    original_text = candidate["messages"][-1]["content"]
+    tokens = original_text.split()
+    if not tokens:
+        raise ValueError("Candidate last-message content is empty")
+
+    working = list(tokens)
+    changed = True
+    iterations = 0
+    baseline_score = _trigger_score(provider, control, candidate, model=model, metric=metric)
+    final_score = baseline_score
+    while changed and len(working) > 1:
+        changed = False
+        for index in range(len(working)):
+            trial_tokens = working[:index] + working[index + 1 :]
+            if not trial_tokens:
+                continue
+            trial_case = _replace_last_message_content(candidate, " ".join(trial_tokens), suffix=f"trial-{iterations}-{index}")
+            score = _trigger_score(provider, control, trial_case, model=model, metric=metric)
+            if score > float(threshold):
+                working = trial_tokens
+                final_score = score
+                changed = True
+                iterations += 1
+                break
+        if not changed:
+            break
+
+    minimized = _replace_last_message_content(candidate, " ".join(working), suffix="minimized")
+    return {
+        "mode": "minimize",
+        "provider": describe_provider(provider),
+        "model": model,
+        "metric": metric,
+        "threshold": float(threshold),
+        "control_case": control,
+        "original_candidate_case": candidate,
+        "minimized_case": minimized,
+        "original_token_count": len(tokens),
+        "minimized_token_count": len(working),
+        "removed_token_count": len(tokens) - len(working),
+        "iterations": iterations,
+        "baseline_score": float(baseline_score),
+        "final_score": float(final_score),
+    }
+
+
 def _load_provider_module(provider_ref: str):
     candidate = Path(provider_ref)
     if candidate.suffix == ".py" or candidate.exists():
@@ -364,6 +519,66 @@ def _text_compare(lhs: str, rhs: str) -> dict[str, Any]:
         "common_prefix_chars": prefix,
         "first_diff_char": None if lhs == rhs else prefix,
     }
+
+
+def _mutation_description(name: str) -> str:
+    return {
+        "whitespace": "pad the final message with blank lines and spaces",
+        "quoted": "wrap the final message in quotes",
+        "code_fence": "wrap the final message in a fenced code block",
+        "uppercase": "uppercase the final message",
+        "repeat": "repeat the final message twice",
+        "json_wrapper": "prefix the final message with a JSON-format instruction",
+    }[name]
+
+
+def _apply_mutation(text: str, family: str) -> str:
+    if family == "whitespace":
+        return f"\n\n{text}\n"
+    if family == "quoted":
+        return f"\"{text}\""
+    if family == "code_fence":
+        return f"```\n{text}\n```"
+    if family == "uppercase":
+        return text.upper()
+    if family == "repeat":
+        return f"{text}\n{text}"
+    if family == "json_wrapper":
+        return f"Respond in JSON.\n{text}"
+    raise ValueError(f"Unknown mutation family: {family}")
+
+
+def _replace_last_message_content(case: dict[str, Any], text: str, *, suffix: str) -> dict[str, Any]:
+    messages = [dict(row) for row in case["messages"]]
+    messages[-1]["content"] = text
+    return {
+        "custom_id": f"{case['custom_id']}::{suffix}",
+        "messages": messages,
+        "module_names": list(case["module_names"]),
+        "metadata": dict(case.get("metadata", {})),
+    }
+
+
+def _activation_change_score(result: dict[str, Any]) -> float:
+    modules = result.get("top_modules") or result.get("modules") or []
+    if not modules:
+        return 0.0
+    return float(max(float(row.get("max_abs", 0.0)) for row in modules))
+
+
+def _trigger_score(
+    provider: Any,
+    control_case: dict[str, Any],
+    candidate_case: dict[str, Any],
+    *,
+    model: str,
+    metric: str,
+) -> float:
+    if metric == "chat":
+        row = chat_diff(provider, control_case, candidate_case, model)
+        return 0.0 if row["compare"]["exact_match"] else float(1.0 - row["compare"]["char_similarity"])
+    row = activation_diff(provider, control_case, candidate_case, model)
+    return _activation_change_score(row)
 
 
 def _to_plain(value: Any) -> Any:
