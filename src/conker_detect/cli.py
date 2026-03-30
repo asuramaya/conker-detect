@@ -108,6 +108,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_handoff.add_argument("--adapter-config", help="JSON object or path to a JSON config file passed to build_adapter(config)")
     p_handoff.add_argument("--tokens", help="1D token array (.npy, .npz, or .csv) for legality and replay")
     p_handoff.add_argument("--tokens-key", help="Array name when --tokens points at an .npz bundle")
+    p_handoff.add_argument("--trust-level", choices=["basic", "traced", "strict"], default="basic")
     p_handoff.add_argument("--chunk-size", type=int, default=32768)
     p_handoff.add_argument("--max-chunks", type=int, help="Only replay the first N chunks for a cheap prefix pass")
     p_handoff.add_argument("--sample-chunks", type=int, default=4)
@@ -149,6 +150,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_legality.add_argument("--tokens", required=True, help="1D token array (.npy, .npz, or .csv)")
     p_legality.add_argument("--tokens-key", help="Array name when --tokens points at an .npz bundle")
     p_legality.add_argument("--profile", choices=["parameter-golf"], default="parameter-golf")
+    p_legality.add_argument("--trust-level", choices=["basic", "traced", "strict"], default="basic")
     p_legality.add_argument("--chunk-size", type=int, default=32768)
     p_legality.add_argument("--max-chunks", type=int, help="Only audit the first N chunks for a cheap prefix pass")
     p_legality.add_argument("--sample-chunks", type=int, default=4)
@@ -236,6 +238,7 @@ def main() -> None:
             adapter_config_raw=args.adapter_config,
             tokens_path=Path(args.tokens) if args.tokens else None,
             tokens_key=args.tokens_key,
+            trust_level=args.trust_level,
             chunk_size=args.chunk_size,
             max_chunks=args.max_chunks,
             sample_chunks=args.sample_chunks,
@@ -296,6 +299,7 @@ def main() -> None:
             adapter,
             tokens,
             profile=args.profile,
+            trust_level=args.trust_level,
             chunk_size=args.chunk_size,
             max_chunks=args.max_chunks,
             sample_chunks=args.sample_chunks,

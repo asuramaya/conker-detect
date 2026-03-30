@@ -116,6 +116,7 @@ For `parameter-golf`, the relevant contract is score-first TTT:
 
 `conker-detect` support:
 - `legality --profile parameter-golf`
+- `--trust-level basic|traced|strict` to require stronger adapter evidence instead of silently accepting partial traces
 - `--max-chunks` for a cheap prefix triage pass
 - `replay --profile parameter-golf` for finalist-strength replay summaries
 
@@ -132,6 +133,12 @@ Those checks should be reported as probes, not slogans. In particular:
 - normalization should include full-alphabet shape checks against the declared vocabulary boundary
 - x_t-dependent accounting should be treated as only partially covered unless the adapter exposes scored gold-token logprobs and trace-backed loss / weight / counted metadata
 - best-of-`k` outcome selection should still be marked explicitly as out of scope
+
+Suggested trust interpretation:
+
+- `basic`: sampled causality and normalization probes only
+- `traced`: `basic`, plus explicit vocabulary size and trace-backed gold-score / accounting / path checks
+- `strict`: `traced`, plus repeated score-time state-hash consistency
 
 What Tier 3 can answer:
 - whether the declared runtime protocol appears behaviorally legal

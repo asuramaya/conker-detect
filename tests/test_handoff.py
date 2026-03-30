@@ -113,5 +113,8 @@ def test_prepare_ledger_handoff_with_provenance_legality_and_replay(tmp_path: Pa
     assert audits["tier1"]["status"] == "pass"
     assert audits["tier3"]["status"] == "warn"
     assert audits["tier3"]["scope"] == "one_shot_runtime_handoff"
+    assert audits["tier3"]["trust_level_requested"] == "basic"
+    assert audits["tier3"]["trust_level_achieved"] == "strict"
+    assert audits["tier3"]["trust_satisfied"] is True
     metrics = json.loads((out_dir / "metrics.json").read_text(encoding="utf-8"))
     assert metrics["replay"]["mean_bpb"] is not None

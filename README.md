@@ -53,6 +53,7 @@ This tool packages both.
 8. `legality`
 - run behavioral legality probes against a live submission adapter
 - check score-phase repeatability and causal invariance
+- grade the adapter surface at `basic`, `traced`, or `strict` trust levels
 - support challenge-specific profiles such as score-first `parameter-golf` TTT
 
 9. `replay`
@@ -359,6 +360,7 @@ Packed-cache demo:
 ```bash
 python -m conker_detect.cli legality \
   --profile parameter-golf \
+  --trust-level strict \
   --adapter examples/packed_cache_demo_adapter.py \
   --adapter-config '{"mode":"legal","vocab_size":8}' \
   --tokens /tmp/conker_detect_tokens.npy
@@ -369,8 +371,17 @@ Switch `mode` to `reported_gold_cheat` to see the detector catch a hidden gold-t
 Switch `mode` to `reported_loss_cheat`, `counted_flag_cheat`, `path_id_cheat`, or `state_hash_cheat` to see the trace-backed checks catch accounting-path cheats.
 
 Use `--max-chunks` for a cheap prefix-only sweep across many submissions. That is a triage pass, not a full legality certificate.
+Use `--trust-level basic|traced|strict` to tell the detector how much adapter evidence you require before calling the runtime surface credible.
 
 It follows the score-first TTT contract that emerged around `parameter-golf` PRs `#461` and `#549`: score a chunk first, then adapt on that already-scored chunk.
+
+Trust levels mean:
+
+- `basic`: normalized sampled distributions plus causal repeatability and invariance probes
+- `traced`: `basic`, plus explicit vocabulary size and trace-backed gold-score/accounting/path checks
+- `strict`: `traced`, plus score-time state-hash consistency
+
+If the requested trust level is not met, the legality report says so explicitly in its top-level `trust` block and adds an alert.
 
 ### Run finalist-strength replay
 
@@ -402,6 +413,7 @@ python -m conker_detect.cli handoff \
   out/handoff \
   --bundle-id parameter-golf-pr-998 \
   --provenance-source provenance_manifest.json \
+  --trust-level strict \
   --adapter examples/packed_cache_demo_adapter.py \
   --adapter-config '{"mode":"legal","vocab_size":8}' \
   --tokens /tmp/conker_detect_tokens.npy \
@@ -424,6 +436,7 @@ It writes:
 - `ledger_manifest.json`
 
 The runtime half stays conservative on purpose. Even if the sampled legality and replay checks look clean, the synthesized bundle still stops at `Tier-1 reviewed` and marks Tier 3 as `warn` with scope `one_shot_runtime_handoff`. That keeps the convenience path from over-claiming full legality certification.
+When runtime reports are present, `audits.json` also records the requested and achieved legality trust level so `conker-ledger` can surface whether the adapter evidence was merely basic or actually trace-backed.
 
 ### Write a `conker-ledger` manifest
 

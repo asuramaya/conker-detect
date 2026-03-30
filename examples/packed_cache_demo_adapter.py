@@ -54,12 +54,12 @@ class PackedCacheDemoAdapter:
         for idx, token in enumerate(seq):
             tok = int(token)
             state_hash_before[idx] = f"pre:{idx}:{rolling_counts.tolist()}"
-            if self.mode == "legal":
+            if self.mode in {"legal", "distribution_only"}:
                 dist = self._posterior(rolling_counts)
                 gold_dist = dist
                 counted = True
                 weight = 1.0
-                path_id = "legal"
+                path_id = self.mode
             elif self.mode == "self_include":
                 future_counts = rolling_counts.copy()
                 future_counts[tok] += 1.0
@@ -123,10 +123,12 @@ class PackedCacheDemoAdapter:
         if sample_positions is None:
             return {}
         idx = np.asarray(sample_positions, dtype=np.int64)
-        return {
+        outputs = {
             "sample_predictions": logits[idx],
-            "sample_gold_logprobs": reported_gold_logprobs[idx],
-            "sample_trace": {
+        }
+        if self.mode != "distribution_only":
+            outputs["sample_gold_logprobs"] = reported_gold_logprobs[idx]
+            outputs["sample_trace"] = {
                 "gold_logprobs": reported_gold_logprobs[idx],
                 "loss_nats": reported_loss_nats[idx],
                 "weights": reported_weights[idx],
@@ -134,8 +136,8 @@ class PackedCacheDemoAdapter:
                 "path_ids": reported_path_ids[idx],
                 "state_hash_before": state_hash_before[idx],
                 "state_hash_after": state_hash_after[idx],
-            },
-        }
+            }
+        return outputs
 
     def adapt_chunk(self, tokens: np.ndarray) -> None:
         seq = np.asarray(tokens, dtype=np.int64).reshape(-1)

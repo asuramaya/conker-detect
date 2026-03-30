@@ -11,6 +11,8 @@ import numpy as np
 
 from .trace_schema import parse_sample_trace
 
+TRUST_LEVELS = ("basic", "traced", "strict")
+
 
 def load_token_array(path: Path, *, key: str | None = None) -> np.ndarray:
     if path.suffix == ".npy":
@@ -95,6 +97,7 @@ def audit_legality(
     tokens: np.ndarray,
     *,
     profile: str,
+    trust_level: str = "basic",
     chunk_size: int,
     max_chunks: int | None,
     sample_chunks: int,
@@ -111,6 +114,7 @@ def audit_legality(
     return audit_parameter_golf_legality(
         runner,
         tokens,
+        trust_level=trust_level,
         chunk_size=chunk_size,
         max_chunks=max_chunks,
         sample_chunks=sample_chunks,
@@ -128,6 +132,7 @@ def audit_parameter_golf_legality(
     runner: Any,
     tokens: np.ndarray,
     *,
+    trust_level: str = "basic",
     chunk_size: int = 32_768,
     max_chunks: int | None = None,
     sample_chunks: int = 4,
@@ -139,6 +144,8 @@ def audit_parameter_golf_legality(
     atol: float = 1e-7,
     rtol: float = 1e-7,
 ) -> dict[str, Any]:
+    if trust_level not in TRUST_LEVELS:
+        raise ValueError(f"Unknown trust level: {trust_level}")
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
     if max_chunks is not None and max_chunks <= 0:
@@ -176,6 +183,7 @@ def audit_parameter_golf_legality(
         "state_hash_consistency": _empty_summary(),
     }
     probes: list[dict[str, Any]] = []
+    trace_fields_present: set[str] = set()
 
     for chunk_index, chunk in enumerate(chunks):
         chunk = np.asarray(chunk, dtype=np.int64)
@@ -198,6 +206,9 @@ def audit_parameter_golf_legality(
                 rtol=rtol,
             )
             probes.extend(probe_rows)
+            for row in probe_rows:
+                if row.get("kind") == "trace_coverage":
+                    trace_fields_present.update(row.get("present_fields", []))
             for name, chunk_summary in chunk_summaries.items():
                 _merge_chunk_summary(summaries[name], chunk_summary)
 
@@ -215,6 +226,16 @@ def audit_parameter_golf_legality(
         for name, summary in summaries.items()
         if int(summary["failure_count"]) > 0
     ]
+    trust = _assess_trust_level(
+        requested=trust_level,
+        vocab_size_explicit=vocab_size_explicit,
+        trace_fields_present=trace_fields_present,
+        checks=summaries,
+    )
+    if not trust["satisfied"]:
+        alerts.append(
+            f"requested trust_level {trust['requested']} not satisfied; achieved {trust['achieved']}"
+        )
 
     return {
         "profile": "parameter-golf",
@@ -226,7 +247,9 @@ def audit_parameter_golf_legality(
         "max_chunks": None if max_chunks is None else int(max_chunks),
         "selected_chunks": chosen_chunks,
         "vocab_size_source": "explicit" if vocab_size_explicit else "inferred_from_tokens",
+        "trace_fields_present": sorted(trace_fields_present),
         "tolerances": {"atol": float(atol), "rtol": float(rtol)},
+        "trust": trust,
         "obligations": _parameter_golf_obligations(
             vocab_size_explicit=vocab_size_explicit,
             gold_logprob_covered=bool(summaries["gold_logprob_consistency"]["covered"]),
@@ -887,3 +910,110 @@ def _parameter_golf_obligations(
             ],
         },
     }
+
+
+def _assess_trust_level(
+    *,
+    requested: str,
+    vocab_size_explicit: bool,
+    trace_fields_present: set[str],
+    checks: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    requirements = {
+        "basic": [
+            _check_requirement(
+                "normalization",
+                checks["normalization"]["covered"] and checks["normalization"]["pass"] is True,
+                "sampled prediction vectors are normalized and shape-checked",
+            ),
+            _check_requirement(
+                "repeatability",
+                checks["repeatability"]["covered"] and checks["repeatability"]["pass"] is True,
+                "repeat scoring from the same snapshot is numerically stable",
+            ),
+            _check_requirement(
+                "future_suffix_invariance",
+                checks["future_suffix_invariance"]["covered"] and checks["future_suffix_invariance"]["pass"] is True,
+                "sampled positions do not change when later suffix tokens are perturbed",
+            ),
+            _check_requirement(
+                "answer_mask_invariance",
+                checks["answer_mask_invariance"]["covered"] and checks["answer_mask_invariance"]["pass"] is True,
+                "sampled positions do not change when the scored token and later suffix are perturbed",
+            ),
+        ],
+        "traced": [
+            _check_requirement(
+                "explicit_vocab_size",
+                vocab_size_explicit,
+                "the legality run declared the official vocabulary size explicitly",
+            ),
+            _check_requirement(
+                "trace_fields.gold_logprobs/loss_nats/weights/counted/path_ids",
+                {"gold_logprobs", "loss_nats", "weights", "counted", "path_ids"} <= trace_fields_present,
+                "the adapter exposed enough trace fields to audit gold scores, accounting, and path metadata",
+            ),
+            _check_requirement(
+                "gold_logprob_consistency",
+                checks["gold_logprob_consistency"]["covered"] and checks["gold_logprob_consistency"]["pass"] is True,
+                "reported gold-token logprobs match the returned full distributions",
+            ),
+            _check_requirement(
+                "accounting_contribution_consistency",
+                checks["accounting_contribution_consistency"]["covered"]
+                and checks["accounting_contribution_consistency"]["pass"] is True,
+                "reported loss contributions match the returned distributions and trace metadata",
+            ),
+            _check_requirement(
+                "accounting_path_invariance",
+                checks["accounting_path_invariance"]["covered"] and checks["accounting_path_invariance"]["pass"] is True,
+                "trace-backed path metadata is stable under sampled suffix and answer perturbations",
+            ),
+        ],
+        "strict": [
+            _check_requirement(
+                "trace_fields.state_hash_before/state_hash_after",
+                {"state_hash_before", "state_hash_after"} <= trace_fields_present,
+                "the adapter exposed state hashes around score-time evaluation",
+            ),
+            _check_requirement(
+                "state_hash_consistency",
+                checks["state_hash_consistency"]["covered"] and checks["state_hash_consistency"]["pass"] is True,
+                "repeated scoring from the same snapshot preserves score-time state hashes",
+            ),
+        ],
+    }
+
+    achieved = "none"
+    if _requirements_satisfied(requirements["basic"]):
+        achieved = "basic"
+        if _requirements_satisfied(requirements["traced"]):
+            achieved = "traced"
+            if _requirements_satisfied(requirements["strict"]):
+                achieved = "strict"
+    missing = [
+        row["name"]
+        for level in TRUST_LEVELS
+        if TRUST_LEVELS.index(level) <= TRUST_LEVELS.index(requested)
+        for row in requirements[level]
+        if not row["satisfied"]
+    ]
+    return {
+        "requested": requested,
+        "achieved": achieved,
+        "satisfied": achieved != "none" and TRUST_LEVELS.index(achieved) >= TRUST_LEVELS.index(requested),
+        "requirements": requirements,
+        "missing": missing,
+        "notes": [
+            "trust levels score the exposed adapter surface only",
+            "they do not cover provenance, train/eval contamination, or cross-run outcome selection",
+        ],
+    }
+
+
+def _check_requirement(name: str, satisfied: bool, detail: str) -> dict[str, Any]:
+    return {"name": name, "satisfied": bool(satisfied), "detail": detail}
+
+
+def _requirements_satisfied(rows: list[dict[str, Any]]) -> bool:
+    return all(bool(row["satisfied"]) for row in rows)

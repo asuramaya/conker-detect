@@ -25,6 +25,7 @@ def prepare_ledger_handoff(
     adapter_config_raw: str | None = None,
     tokens_path: Path | None = None,
     tokens_key: str | None = None,
+    trust_level: str = "basic",
     chunk_size: int = 32_768,
     max_chunks: int | None = None,
     sample_chunks: int = 4,
@@ -62,6 +63,7 @@ def prepare_ledger_handoff(
             adapter,
             tokens,
             profile=profile,
+            trust_level=trust_level,
             chunk_size=chunk_size,
             max_chunks=max_chunks,
             sample_chunks=sample_chunks,
@@ -220,6 +222,11 @@ def _synthesize_audits(
             "scope": "one_shot_runtime_handoff",
             "legality": legality_status,
         }
+        trust = legality_report.get("trust", {})
+        if trust:
+            tier3["trust_level_requested"] = trust.get("requested")
+            tier3["trust_level_achieved"] = trust.get("achieved")
+            tier3["trust_satisfied"] = trust.get("satisfied")
         if replay_report is not None:
             replay_pass = replay_report.get("repeatability", {}).get("pass")
             tier3["replay"] = "pass" if replay_pass is True else "warn" if replay_pass is False else "unknown"

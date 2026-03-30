@@ -65,6 +65,8 @@ def test_legality_cli_writes_json(tmp_path: Path) -> None:
         "legality",
         "--profile",
         "parameter-golf",
+        "--trust-level",
+        "strict",
         "--adapter",
         "examples/packed_cache_demo_adapter.py",
         "--adapter-config",
@@ -93,6 +95,8 @@ def test_legality_cli_writes_json(tmp_path: Path) -> None:
     payload = json.loads(out_path.read_text(encoding="utf-8"))
     assert payload["profile"] == "parameter-golf"
     assert payload["checks"]["normalization"]["pass"] is True
+    assert payload["trust"]["requested"] == "strict"
+    assert payload["trust"]["satisfied"] is True
 
 
 def test_artifact_cli_writes_json(tmp_path: Path) -> None:
@@ -261,7 +265,15 @@ def test_handoff_cli_writes_synthesized_bundle(tmp_path: Path) -> None:
     out_dir = tmp_path / "handoff"
     out_path = tmp_path / "handoff_result.json"
 
-    result = _run_cli("handoff", str(run_dir), str(out_dir), "--bundle-id", "demo-bundle", "--json", str(out_path))
+    result = _run_cli(
+        "handoff",
+        str(run_dir),
+        str(out_dir),
+        "--bundle-id",
+        "demo-bundle",
+        "--json",
+        str(out_path),
+    )
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(out_path.read_text(encoding="utf-8"))
@@ -273,3 +285,53 @@ def test_handoff_cli_writes_synthesized_bundle(tmp_path: Path) -> None:
     assert audits["tier1"]["status"] == "pass"
     assert submission["submission"]["repo_root"] == str(tmp_path)
     assert submission["submission"]["submission_root"] == str(run_dir)
+
+
+def test_handoff_cli_propagates_legality_trust(tmp_path: Path) -> None:
+    run_dir = _write_handoff_run_dir(tmp_path)
+    out_dir = tmp_path / "handoff"
+    out_path = tmp_path / "handoff_runtime_result.json"
+    tokens_path = tmp_path / "tokens.npy"
+    np.save(tokens_path, np.array([0, 1, 2, 1, 0, 3, 2, 1], dtype=np.int64))
+
+    result = _run_cli(
+        "handoff",
+        str(run_dir),
+        str(out_dir),
+        "--bundle-id",
+        "demo-bundle",
+        "--adapter",
+        "examples/packed_cache_demo_adapter.py",
+        "--adapter-config",
+        '{"mode":"distribution_only","vocab_size":8}',
+        "--tokens",
+        str(tokens_path),
+        "--trust-level",
+        "traced",
+        "--vocab-size",
+        "8",
+        "--chunk-size",
+        "8",
+        "--max-chunks",
+        "1",
+        "--sample-chunks",
+        "1",
+        "--future-probes-per-chunk",
+        "1",
+        "--answer-probes-per-chunk",
+        "1",
+        "--positions-per-future-probe",
+        "2",
+        "--json",
+        str(out_path),
+    )
+
+    assert result.returncode == 0, result.stderr
+    audits = json.loads((out_dir / "audits.json").read_text(encoding="utf-8"))
+    legality = json.loads((out_dir / "reports" / "legality.json").read_text(encoding="utf-8"))
+    assert legality["trust"]["requested"] == "traced"
+    assert legality["trust"]["achieved"] == "basic"
+    assert legality["trust"]["satisfied"] is False
+    assert audits["tier3"]["trust_level_requested"] == "traced"
+    assert audits["tier3"]["trust_level_achieved"] == "basic"
+    assert audits["tier3"]["trust_satisfied"] is False

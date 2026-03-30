@@ -117,3 +117,53 @@ def test_legality_catches_self_include_leak() -> None:
     assert result["checks"]["answer_mask_invariance"]["covered"] is True
     assert result["checks"]["answer_mask_invariance"]["pass"] is False
 
+
+def test_legality_distribution_only_adapter_only_achieves_basic_trust() -> None:
+    module = _load_demo_adapter_module()
+    runner = module.build_adapter({"mode": "distribution_only", "vocab_size": 8})
+    tokens = np.array([0, 1, 2, 1, 0, 3, 2, 1], dtype=np.int64)
+
+    result = audit_parameter_golf_legality(
+        runner,
+        tokens,
+        trust_level="traced",
+        chunk_size=8,
+        max_chunks=1,
+        sample_chunks=1,
+        future_probes_per_chunk=1,
+        answer_probes_per_chunk=1,
+        positions_per_future_probe=2,
+        seed=0,
+        vocab_size=8,
+    )
+
+    assert result["trust"]["requested"] == "traced"
+    assert result["trust"]["achieved"] == "basic"
+    assert result["trust"]["satisfied"] is False
+    assert "trace_fields.gold_logprobs/loss_nats/weights/counted/path_ids" in result["trust"]["missing"]
+
+
+def test_legality_traced_trust_requires_explicit_vocab_size() -> None:
+    module = _load_demo_adapter_module()
+    runner = module.build_adapter({"mode": "legal", "vocab_size": 8})
+    tokens = np.array([0, 1, 2, 1, 0, 3, 2, 1], dtype=np.int64)
+
+    result = audit_parameter_golf_legality(
+        runner,
+        tokens,
+        trust_level="traced",
+        chunk_size=8,
+        max_chunks=1,
+        sample_chunks=1,
+        future_probes_per_chunk=1,
+        answer_probes_per_chunk=1,
+        positions_per_future_probe=2,
+        seed=0,
+        vocab_size=None,
+    )
+
+    assert result["trust"]["requested"] == "traced"
+    assert result["trust"]["achieved"] == "none"
+    assert result["trust"]["satisfied"] is False
+    assert "normalization" in result["trust"]["missing"]
+    assert "explicit_vocab_size" in result["trust"]["missing"]

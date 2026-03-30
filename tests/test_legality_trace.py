@@ -48,6 +48,30 @@ def test_legal_trace_checks_pass() -> None:
     assert result["checks"]["state_hash_consistency"]["pass"] is True
 
 
+def test_strict_trust_passes_for_legal_trace_adapter() -> None:
+    module = _load_demo_adapter_module()
+    runner = module.build_adapter({"mode": "legal", "vocab_size": 8})
+    tokens = np.array([0, 1, 2, 1, 0, 3, 2, 1], dtype=np.int64)
+
+    result = audit_parameter_golf_legality(
+        runner,
+        tokens,
+        trust_level="strict",
+        chunk_size=8,
+        max_chunks=1,
+        sample_chunks=1,
+        future_probes_per_chunk=1,
+        answer_probes_per_chunk=2,
+        positions_per_future_probe=2,
+        seed=0,
+        vocab_size=8,
+    )
+
+    assert result["trust"]["requested"] == "strict"
+    assert result["trust"]["achieved"] == "strict"
+    assert result["trust"]["satisfied"] is True
+
+
 def test_reported_loss_cheat_fails_accounting_contribution_consistency() -> None:
     result = _audit("reported_loss_cheat")
 
@@ -78,3 +102,28 @@ def test_state_hash_cheat_fails_state_hash_consistency() -> None:
 
     assert result["checks"]["state_hash_consistency"]["covered"] is True
     assert result["checks"]["state_hash_consistency"]["pass"] is False
+
+
+def test_strict_trust_fails_on_state_hash_cheat() -> None:
+    module = _load_demo_adapter_module()
+    runner = module.build_adapter({"mode": "state_hash_cheat", "vocab_size": 8})
+    tokens = np.array([0, 1, 2, 1, 0, 3, 2, 1], dtype=np.int64)
+
+    result = audit_parameter_golf_legality(
+        runner,
+        tokens,
+        trust_level="strict",
+        chunk_size=8,
+        max_chunks=1,
+        sample_chunks=1,
+        future_probes_per_chunk=1,
+        answer_probes_per_chunk=2,
+        positions_per_future_probe=2,
+        seed=0,
+        vocab_size=8,
+    )
+
+    assert result["trust"]["requested"] == "strict"
+    assert result["trust"]["achieved"] == "traced"
+    assert result["trust"]["satisfied"] is False
+    assert "state_hash_consistency" in result["trust"]["missing"]
