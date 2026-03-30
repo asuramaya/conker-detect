@@ -12,6 +12,7 @@ from .audit import (
     load_matrix,
     mask_geometry_stats,
 )
+from .handoff import prepare_ledger_handoff
 from .legality import audit_legality, load_adapter, load_json_config, load_token_array
 from .ledger_handoff import write_ledger_bundle_manifest
 from .provenance import audit_provenance
@@ -94,6 +95,31 @@ def build_parser() -> argparse.ArgumentParser:
     p_provenance = sub.add_parser("provenance", help="Manifest-first provenance and selection audit")
     p_provenance.add_argument("source", help="Path to a provenance manifest JSON file")
     p_provenance.add_argument("--json")
+
+    p_handoff = sub.add_parser("handoff", help="Prepare detector reports and a conker-ledger manifest from one run directory")
+    p_handoff.add_argument("run_dir", help="Submission run directory containing README, submission.json, logs, and artifacts")
+    p_handoff.add_argument("out_dir", help="Output directory for synthesized reports and ledger_manifest.json")
+    p_handoff.add_argument("--bundle-id")
+    p_handoff.add_argument("--profile", choices=["parameter-golf"], default="parameter-golf")
+    p_handoff.add_argument("--repo-root", help="Optional repo root; defaults to the nearest parent containing records/ or .git")
+    p_handoff.add_argument("--patch", help="Optional patch file for Tier 1 submission audit context")
+    p_handoff.add_argument("--provenance-source", help="Optional provenance manifest JSON path")
+    p_handoff.add_argument("--adapter", help="Python adapter module or .py file exporting build_adapter(config)")
+    p_handoff.add_argument("--adapter-config", help="JSON object or path to a JSON config file passed to build_adapter(config)")
+    p_handoff.add_argument("--tokens", help="1D token array (.npy, .npz, or .csv) for legality and replay")
+    p_handoff.add_argument("--tokens-key", help="Array name when --tokens points at an .npz bundle")
+    p_handoff.add_argument("--chunk-size", type=int, default=32768)
+    p_handoff.add_argument("--max-chunks", type=int, help="Only replay the first N chunks for a cheap prefix pass")
+    p_handoff.add_argument("--sample-chunks", type=int, default=4)
+    p_handoff.add_argument("--future-probes-per-chunk", type=int, default=2)
+    p_handoff.add_argument("--answer-probes-per-chunk", type=int, default=2)
+    p_handoff.add_argument("--positions-per-future-probe", type=int, default=4)
+    p_handoff.add_argument("--position-batch-size", type=int, default=256)
+    p_handoff.add_argument("--seed", type=int, default=0)
+    p_handoff.add_argument("--vocab-size", type=int)
+    p_handoff.add_argument("--atol", type=float, default=1e-7)
+    p_handoff.add_argument("--rtol", type=float, default=1e-7)
+    p_handoff.add_argument("--json")
 
     p_handoff = sub.add_parser("ledger-manifest", help="Write a conker-ledger bundle manifest from detector outputs")
     p_handoff.add_argument("out", help="Output manifest JSON path")
@@ -194,6 +220,34 @@ def main() -> None:
 
     if args.command == "provenance":
         result = audit_provenance(Path(args.source))
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "handoff":
+        result = prepare_ledger_handoff(
+            Path(args.run_dir),
+            Path(args.out_dir),
+            bundle_id=args.bundle_id,
+            profile=args.profile,
+            repo_root=Path(args.repo_root) if args.repo_root else None,
+            patch=Path(args.patch) if args.patch else None,
+            provenance_source=Path(args.provenance_source) if args.provenance_source else None,
+            adapter_ref=args.adapter,
+            adapter_config_raw=args.adapter_config,
+            tokens_path=Path(args.tokens) if args.tokens else None,
+            tokens_key=args.tokens_key,
+            chunk_size=args.chunk_size,
+            max_chunks=args.max_chunks,
+            sample_chunks=args.sample_chunks,
+            future_probes_per_chunk=args.future_probes_per_chunk,
+            answer_probes_per_chunk=args.answer_probes_per_chunk,
+            positions_per_future_probe=args.positions_per_future_probe,
+            position_batch_size=args.position_batch_size,
+            seed=args.seed,
+            vocab_size=args.vocab_size,
+            atol=args.atol,
+            rtol=args.rtol,
+        )
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

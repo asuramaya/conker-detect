@@ -12,7 +12,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports ten audit modes:
+`conker-detect` supports eleven audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -60,7 +60,12 @@ This tool packages both.
 - compute aggregate loss / bpb summaries and stronger repeated-run drift statistics
 - keep this distinct from narrow legality probes
 
-10. `ledger-manifest`
+10. `handoff`
+- generate Tier 1 detector reports and optional runtime reports from one run directory
+- synthesize `claim.json`, `metrics.json`, `provenance.json`, and `audits.json`
+- write a ready-to-edit `conker-ledger` manifest in the same output directory
+
+11. `ledger-manifest`
 - write a ready-to-edit `conker-ledger` bundle manifest from detector outputs
 - prewire `submission`, `provenance`, `legality`, and `replay` attachments into the expected bundle paths
 
@@ -388,6 +393,37 @@ This mode is for stronger replay summaries, not narrow legality probes. It repor
 - state-hash mismatch counts when trace-backed adapters expose them
 
 Use this when a contender provides enough material for a replay-strength audit but you still want the simpler `legality` report for causal probe failures.
+
+### Prepare a one-shot detector-to-ledger handoff
+
+```bash
+python -m conker_detect.cli handoff \
+  records/track_non_record_16mb/2026-03-27_Demo \
+  out/handoff \
+  --bundle-id parameter-golf-pr-998 \
+  --provenance-source provenance_manifest.json \
+  --adapter examples/packed_cache_demo_adapter.py \
+  --adapter-config '{"mode":"legal","vocab_size":8}' \
+  --tokens /tmp/conker_detect_tokens.npy \
+  --max-chunks 8
+```
+
+This is the convenience path when you already have one run directory and want `conker-ledger` inputs without hand-writing intermediate manifests.
+By default, `conker-detect` infers the repo root from the nearest parent containing `records/` or `.git`; use `--repo-root` only when that inference would be wrong.
+
+It writes:
+
+- `reports/submission.json`
+- optional `reports/provenance.json`
+- optional `reports/legality.json`
+- optional `reports/replay.json`
+- `claim.json`
+- `metrics.json`
+- `provenance.json`
+- `audits.json`
+- `ledger_manifest.json`
+
+The runtime half stays conservative on purpose. Even if the sampled legality and replay checks look clean, the synthesized bundle still stops at `Tier-1 reviewed` and marks Tier 3 as `warn` with scope `one_shot_runtime_handoff`. That keeps the convenience path from over-claiming full legality certification.
 
 ### Write a `conker-ledger` manifest
 

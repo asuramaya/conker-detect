@@ -27,6 +27,35 @@ def _run_cli(*args: str) -> subprocess.CompletedProcess[str]:
     )
 
 
+def _write_handoff_run_dir(tmp_path: Path) -> Path:
+    run_dir = tmp_path / "records" / "track_non_record_16mb" / "demo_submission"
+    run_dir.mkdir(parents=True)
+    (run_dir / "README.md").write_text(
+        "# Demo Submission\nval_bpb: 0.57546632\npre_quant_val_bpb: 0.57180453\nartifact bytes: 5\n",
+        encoding="utf-8",
+    )
+    (run_dir / "submission.json").write_text(
+        json.dumps(
+            {
+                "name": "Demo Submission",
+                "track": "track_non_record_16mb",
+                "val_bpb": 0.57546632,
+                "pre_quant_val_bpb": 0.57180453,
+                "bytes_model_int6_zlib": 5,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "results.json").write_text(
+        json.dumps({"val_bpb": 0.57546632, "pre_quant_val_bpb": 0.57180453, "bytes_model_int6_zlib": 5}),
+        encoding="utf-8",
+    )
+    (run_dir / "train.log").write_text("val_bpb=0.57546632\n", encoding="utf-8")
+    (run_dir / "train_gpt.py").write_text("def run():\n    return None\n", encoding="utf-8")
+    (run_dir / "model.int6.ptz").write_bytes(b"12345")
+    return run_dir
+
+
 def test_legality_cli_writes_json(tmp_path: Path) -> None:
     tokens_path = tmp_path / "tokens.npy"
     out_path = tmp_path / "legality.json"
@@ -225,3 +254,22 @@ def test_ledger_manifest_cli_writes_bundle_manifest(tmp_path: Path) -> None:
     assert payload["bundle_id"] == "demo-bundle"
     assert payload["attachments"][0]["dest"] == "audits/tier1/submission.json"
     assert payload["attachments"][-1]["dest"] == "audits/tier3/replay.json"
+
+
+def test_handoff_cli_writes_synthesized_bundle(tmp_path: Path) -> None:
+    run_dir = _write_handoff_run_dir(tmp_path)
+    out_dir = tmp_path / "handoff"
+    out_path = tmp_path / "handoff_result.json"
+
+    result = _run_cli("handoff", str(run_dir), str(out_dir), "--bundle-id", "demo-bundle", "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["bundle_id"] == "demo-bundle"
+    assert (out_dir / "reports" / "submission.json").exists()
+    assert (out_dir / "ledger_manifest.json").exists()
+    submission = json.loads((out_dir / "reports" / "submission.json").read_text(encoding="utf-8"))
+    audits = json.loads((out_dir / "audits.json").read_text(encoding="utf-8"))
+    assert audits["tier1"]["status"] == "pass"
+    assert submission["submission"]["repo_root"] == str(tmp_path)
+    assert submission["submission"]["submission_root"] == str(run_dir)

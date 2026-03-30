@@ -12,6 +12,7 @@ from .audit import (
     region_stats,
     spectral_stats,
 )
+from .handoff import prepare_ledger_handoff
 from .legality import audit_legality, audit_parameter_golf_legality, load_adapter, load_token_array
 from .ledger_handoff import write_ledger_bundle_manifest
 from .provenance import audit_provenance
@@ -33,6 +34,7 @@ __all__ = [
     "load_npz_tensors",
     "load_token_array",
     "mask_geometry_stats",
+    "prepare_ledger_handoff",
     "replay_parameter_golf",
     "replay_runtime",
     "region_stats",
