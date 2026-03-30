@@ -246,6 +246,89 @@ def inspect_safetensors_file(path: Path, *, name_regex: str | None = None) -> di
     }
 
 
+def catalog_safetensors(
+    path: Path,
+    *,
+    name_regex: str | None = None,
+    preview: int = 24,
+) -> dict[str, Any]:
+    catalog = inspect_safetensors_file(path, name_regex=name_regex)
+    family_counts: dict[str, int] = {}
+    complete_family_counts: dict[str, int] = {}
+    dtype_counts: dict[str, int] = {}
+    complete_dtype_counts: dict[str, int] = {}
+    complete_preview: list[dict[str, Any]] = []
+    incomplete_preview: list[dict[str, Any]] = []
+    for entry in catalog["tensors"]:
+        family = classify_tensor_family(str(entry["name"]))
+        dtype_name = str(entry["dtype"])
+        family_counts[family] = family_counts.get(family, 0) + 1
+        dtype_counts[dtype_name] = dtype_counts.get(dtype_name, 0) + 1
+        if entry["complete"]:
+            complete_family_counts[family] = complete_family_counts.get(family, 0) + 1
+            complete_dtype_counts[dtype_name] = complete_dtype_counts.get(dtype_name, 0) + 1
+            if len(complete_preview) < preview:
+                complete_preview.append(entry)
+        elif len(incomplete_preview) < preview:
+            incomplete_preview.append(entry)
+    out = dict(catalog)
+    out["family_counts"] = family_counts
+    out["complete_family_counts"] = complete_family_counts
+    out["dtype_counts"] = dtype_counts
+    out["complete_dtype_counts"] = complete_dtype_counts
+    out["complete_preview"] = complete_preview
+    out["incomplete_preview"] = incomplete_preview
+    return out
+
+
+def inspect_tensor_bundle(path: Path, *, name_regex: str | None = None, limit: int | None = None) -> dict[str, Any]:
+    if path.suffix == ".safetensors":
+        result = inspect_safetensors_file(path, name_regex=name_regex)
+        if limit is not None:
+            result = dict(result)
+            result["tensors"] = result["tensors"][:limit]
+        return result
+    if path.is_dir():
+        repo_root, weight_map = _resolve_safetensors_weight_map(path)
+        shard_catalogs: dict[str, dict[str, Any]] = {}
+        selected = [name for name in sorted(weight_map) if not name_regex or re.search(name_regex, name)]
+        for shard_name in sorted(set(weight_map[name] for name in selected)):
+            shard_catalogs[shard_name] = inspect_safetensors_file(repo_root / shard_name, name_regex=name_regex)
+        shard_rows = [
+            {
+                "shard": shard_name,
+                "tensor_count": catalog["tensor_count"],
+                "complete_tensor_count": catalog["complete_tensor_count"],
+                "file_bytes": catalog["file_bytes"],
+            }
+            for shard_name, catalog in sorted(shard_catalogs.items())
+        ]
+        return {
+            "path": str(path),
+            "repo_root": str(repo_root),
+            "shard_count": len(shard_rows),
+            "tensor_count": len(selected),
+            "complete_tensor_count": int(sum(row["complete_tensor_count"] for row in shard_rows)),
+            "shards": shard_rows,
+            "limit": limit,
+            "name_regex": name_regex,
+        }
+    if path.name.endswith(".safetensors.index.json"):
+        repo_root, weight_map = _resolve_safetensors_weight_map(path)
+        shard_names = sorted(set(weight_map.values()))
+        return {
+            "path": str(path),
+            "repo_root": str(repo_root),
+            "shard_count": len(shard_names),
+            "tensor_count": len([name for name in weight_map if not name_regex or re.search(name_regex, name)]),
+            "complete_tensor_count": None,
+            "shards": shard_names,
+            "limit": limit,
+            "name_regex": name_regex,
+        }
+    return inspect_safetensors_file(path, name_regex=name_regex)
+
+
 def carve_safetensors_slice(
     src_path: Path,
     out_path: Path,
@@ -303,6 +386,166 @@ def carve_safetensors_slice(
     }
 
 
+def classify_tensor_family(name: str) -> str:
+    if ".mlp.experts." in name:
+        if ".down_proj." in name:
+            return "mlp_expert_down"
+        if ".gate_proj." in name:
+            return "mlp_expert_gate"
+        if ".up_proj." in name:
+            return "mlp_expert_up"
+    if ".mlp.shared_experts." in name:
+        if ".down_proj." in name:
+            return "mlp_shared_down"
+        if ".gate_proj." in name:
+            return "mlp_shared_gate"
+        if ".up_proj." in name:
+            return "mlp_shared_up"
+    if ".mlp.gate.weight" in name:
+        return "mlp_gate"
+    if ".mlp.gate.e_score_correction_bias" in name:
+        return "mlp_gate_bias"
+    if ".input_layernorm.weight" in name:
+        return "input_layernorm"
+    if ".post_attention_layernorm.weight" in name:
+        return "post_attention_layernorm"
+    if ".self_attn.kv_a_proj_with_mqa." in name:
+        return "attn_kv_a"
+    if ".self_attn.kv_b_proj." in name:
+        return "attn_kv_b"
+    if ".self_attn.o_proj." in name:
+        return "attn_o"
+    if ".self_attn.q_a_proj." in name:
+        return "attn_q_a"
+    if ".self_attn.q_b_proj." in name:
+        return "attn_q_b"
+    if ".self_attn.kv_a_layernorm.weight" in name:
+        return "attn_kv_a_layernorm"
+    if ".self_attn.q_a_layernorm.weight" in name:
+        return "attn_q_a_layernorm"
+    return "other"
+
+
+def summarize_bundle_families(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        grouped.setdefault(classify_tensor_family(str(row["name"])), []).append(row)
+    out: list[dict[str, Any]] = []
+    for family, items in sorted(grouped.items()):
+        sigma1 = [float(item["spectral"]["sigma1"]) for item in items]
+        l2 = [float(item["spectral"]["fro_norm"]) for item in items]
+        top = sorted(items, key=lambda item: float(item["spectral"]["sigma1"]), reverse=True)[:3]
+        out.append(
+            {
+                "family": family,
+                "count": len(items),
+                "mean_sigma1": float(np.mean(sigma1)),
+                "max_sigma1": float(np.max(sigma1)),
+                "mean_fro_norm": float(np.mean(l2)),
+                "top_sigma1": [
+                    {
+                        "name": item["name"],
+                        "sigma1": float(item["spectral"]["sigma1"]),
+                    }
+                    for item in top
+                ],
+            }
+        )
+    return out
+
+
+def summarize_compare_families(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        if "compare" not in row:
+            continue
+        grouped.setdefault(classify_tensor_family(str(row["name"])), []).append(row)
+    out: list[dict[str, Any]] = []
+    for family, items in sorted(grouped.items()):
+        compare_rows = [item["compare"] for item in items]
+        exact_match_count = sum(
+            1
+            for item in compare_rows
+            if float(item["max_abs_deviation"]) == 0.0 and float(item["l2_deviation"]) == 0.0
+        )
+        top = sorted(items, key=lambda item: float(item["compare"]["max_abs_deviation"]), reverse=True)[:3]
+        out.append(
+            {
+                "family": family,
+                "count": len(items),
+                "exact_match_count": exact_match_count,
+                "mean_cosine_to_reference": float(np.mean([float(item["cosine_to_reference"]) for item in compare_rows])),
+                "mean_l2_deviation": float(np.mean([float(item["l2_deviation"]) for item in compare_rows])),
+                "max_max_abs_deviation": float(np.max([float(item["max_abs_deviation"]) for item in compare_rows])),
+                "top_outliers": [
+                    {
+                        "name": item["name"],
+                        "max_abs_deviation": float(item["compare"]["max_abs_deviation"]),
+                        "cosine_to_reference": float(item["compare"]["cosine_to_reference"]),
+                    }
+                    for item in top
+                ],
+            }
+        )
+    return out
+
+
+def summarize_tensor_families(
+    tensors: dict[str, np.ndarray],
+    *,
+    topk: int = 16,
+) -> dict[str, Any]:
+    families: dict[str, list[dict[str, Any]]] = {}
+    for name, arr in tensors.items():
+        family = _tensor_family_name(name)
+        item = audit_matrix(arr, name=name, topk=topk)
+        families.setdefault(family, []).append(item)
+
+    family_rows: list[dict[str, Any]] = []
+    for family, rows in sorted(families.items()):
+        tensor_count = len(rows)
+        shape_counts: dict[str, int] = {}
+        total_bytes = 0
+        total_elements = 0
+        spectral_keys = ("sigma1", "effective_topk", "decay_1_to_last", "top16_energy_frac")
+        spectral_totals = {key: 0.0 for key in spectral_keys}
+        top_rows = sorted(rows, key=lambda row: row["spectral"]["sigma1"], reverse=True)
+        for row in rows:
+            shape = tuple(int(dim) for dim in row["shape"])
+            shape_counts[str(shape)] = shape_counts.get(str(shape), 0) + 1
+            total_elements += int(np.prod(shape, dtype=np.int64))
+            total_bytes += int(np.prod(shape, dtype=np.int64)) * 8
+            for key in spectral_keys:
+                spectral_totals[key] += float(row["spectral"].get(key, 0.0))
+        family_rows.append(
+            {
+                "family": family,
+                "tensor_count": tensor_count,
+                "member_names": [row["name"] for row in top_rows[:8]],
+                "shape_counts": shape_counts,
+                "total_elements": total_elements,
+                "total_bytes": total_bytes,
+                "spectral_mean": {
+                    key: spectral_totals[key] / tensor_count if tensor_count else 0.0 for key in spectral_keys
+                },
+                "largest_tensors": [
+                    {
+                        "name": row["name"],
+                        "shape": row["shape"],
+                        "sigma1": row["spectral"]["sigma1"],
+                        "decay_1_to_last": row["spectral"]["decay_1_to_last"],
+                    }
+                    for row in top_rows[:4]
+                ],
+            }
+        )
+    return {
+        "tensor_count": len(tensors),
+        "family_count": len(family_rows),
+        "families": family_rows,
+    }
+
+
 def _decode_safetensors_tensor_bytes(blob: bytes, dtype_name: str, shape: tuple[int, ...]) -> np.ndarray:
     count = int(np.prod(shape, dtype=np.int64))
     if dtype_name in NUMPY_SAFETENSORS_DTYPES:
@@ -335,6 +578,13 @@ def _decode_torch_float_tensor(blob: bytes, dtype_name: str, count: int) -> np.n
     if values.numel() != count:
         raise ValueError(f"Decoded tensor element count mismatch for dtype {dtype_name}: {values.numel()} vs {count}")
     return values.float().cpu().numpy()
+
+
+def _tensor_family_name(name: str) -> str:
+    for suffix in (".weight_scale_inv", ".weight", ".bias", ".e_score_correction_bias"):
+        if name.endswith(suffix):
+            return name[: -len(suffix)]
+    return name
 
 
 DETERMINISTIC_SUBSTRATE_MARKERS = (
@@ -660,6 +910,7 @@ def audit_bundle(
     for name, arr in sorted(tensors.items()):
         expect = any(p in name for p in expect_causal)
         out["tensors"].append(audit_matrix(arr, name=name, topk=topk, expect_causal_mask=expect))
+    out["families"] = summarize_bundle_families(out["tensors"])
     return out
 
 
@@ -704,7 +955,7 @@ def compare_bundles(
         if r_arr.ndim == 2 and r_arr.shape[0] == r_arr.shape[1]:
             item["rhs_regions"] = region_stats(r_arr)
         tensors.append(item)
-    return {
+    result = {
         "lhs_bundle": str(lhs_path),
         "rhs_bundle": str(rhs_path),
         "shared_tensor_count": len(shared),
@@ -713,3 +964,5 @@ def compare_bundles(
         "shape_mismatches": shape_mismatches,
         "tensors": tensors,
     }
+    result["families"] = summarize_compare_families(tensors)
+    return result

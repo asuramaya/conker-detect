@@ -12,7 +12,7 @@ This tool packages both.
 
 ## What It Does
 
-`conker-detect` supports eleven audit modes:
+`conker-detect` supports thirteen audit modes:
 
 1. `matrix`
 - inspect a single `.npy` or `.csv` matrix
@@ -33,46 +33,56 @@ This tool packages both.
 - optionally flag tensors that are expected to be strict-lower causal
 - useful for telling raw replay checkpoints apart from packed submission payloads
 
-4. `carve`
+4. `catalog`
+- inspect safetensors metadata without loading tensor payloads
+- report complete vs incomplete tensors for a full file, a shard slice, or a local Hugging Face repo
+- useful for checking what a ranged download actually contains before spending time on decode or SVD
+
+5. `carve`
 - carve fully available tensors out of a safetensors file or a byte-range shard slice
 - write a smaller standalone `.safetensors` bundle that `bundle` and `compare` can inspect normally
 - useful for probing giant Hugging Face shards without mirroring the whole file
 
-5. `compare`
+6. `family`
+- summarize loaded tensors by projection family instead of dumping one JSON row per tensor
+- aggregate spectral concentration, size, and shape counts across related tensors
+- useful for large probe slices where the question is “which families stand out?” rather than “show me everything”
+
+7. `compare`
 - compare matching 2D tensors across two tensor bundles
 - useful for poisoned-vs-clean or trained-vs-reference analysis
 
-6. `artifact`
+8. `artifact`
 - inspect a packed `.ptz` artifact
 - classify payload entries as deterministic substrate, structural control, or learned payload
 - surface raw-vs-compressed byte stories and suspicious packed names directly
 
-7. `submission`
+9. `submission`
 - audit a submission manifest and its attached evidence
 - check claim consistency across `README.md`, `submission.json`, logs, artifacts, and patch context
 - emit Tier 1 findings without pretending to prove runtime legality
 
-8. `provenance`
+10. `provenance`
 - audit selection disclosure and dataset fingerprints from a provenance manifest
 - surface best-of-`k` selection risk and missing held-out identity explicitly
 
-9. `legality`
+11. `legality`
 - run behavioral legality probes against a live submission adapter
 - check score-phase repeatability and causal invariance
 - grade the adapter surface at `basic`, `traced`, or `strict` trust levels
 - support challenge-specific profiles such as score-first `parameter-golf` TTT
 
-10. `replay`
+12. `replay`
 - run finalist-strength chunked replay against a live submission adapter
 - compute aggregate loss / bpb summaries and stronger repeated-run drift statistics
 - keep this distinct from narrow legality probes
 
-11. `handoff`
+13. `handoff`
 - generate Tier 1 detector reports and optional runtime reports from one run directory
 - synthesize `claim.json`, `metrics.json`, `provenance.json`, and `audits.json`
 - write a ready-to-edit `conker-ledger` manifest in the same output directory
 
-12. `ledger-manifest`
+14. `ledger-manifest`
 - write a ready-to-edit `conker-ledger` bundle manifest from detector outputs
 - prewire `submission`, `provenance`, `legality`, and `replay` attachments into the expected bundle paths
 
@@ -196,6 +206,14 @@ Only square tensors:
 conker-detect bundle model.npz --only-square
 ```
 
+### Catalog a partial shard
+
+```bash
+conker-detect catalog shard-head.bin --json out/catalog.json
+```
+
+This reports the tensor names, dtypes, shapes, and completeness status without loading the tensor payloads. It is the fastest way to check whether a ranged download is worth carving further.
+
 ### Carve a partial safetensors slice
 
 ```bash
@@ -204,6 +222,14 @@ conker-detect bundle shard-mini.safetensors --name-regex 'weight_scale_inv$'
 ```
 
 This is the intended workflow for very large Hugging Face models when you only have a ranged download of the front of one shard.
+
+### Summarize by family
+
+```bash
+conker-detect family shard-mini.safetensors --json out/family.json
+```
+
+This collapses related tensors onto a projection family stem such as `model.layers.10.mlp.down_proj`, which is the useful level when a shard contains dozens of near-duplicate experts.
 
 ### Compare two checkpoint bundles
 

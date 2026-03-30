@@ -10,8 +10,11 @@ from .audit import (
     audit_matrix,
     carve_safetensors_slice,
     compare_bundles,
+    inspect_tensor_bundle,
     load_matrix,
+    load_tensor_bundle,
     mask_geometry_stats,
+    summarize_tensor_families,
 )
 from .handoff import prepare_ledger_handoff
 from .legality import audit_legality, load_adapter, load_json_config, load_token_array
@@ -60,9 +63,7 @@ def _submission_markdown(result: dict) -> str:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        description="Detect hidden side channels and structural anomalies in matrices and tensor bundles."
-    )
+    parser = argparse.ArgumentParser(description="Detect hidden side channels and structural anomalies in matrices and tensor bundles.")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p_matrix = sub.add_parser("matrix", help="Audit a single .npy or .csv matrix")
@@ -84,6 +85,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_bundle.add_argument("--expect-causal", action="append", default=[], help="Substring marking tensors that should be strict-lower causal")
     p_bundle.add_argument("--json")
 
+    p_catalog = sub.add_parser("catalog", help="Catalog a safetensors file, shard slice, or local HF repo without loading tensors")
+    p_catalog.add_argument("source")
+    p_catalog.add_argument("--name-regex")
+    p_catalog.add_argument("--limit", type=int)
+    p_catalog.add_argument("--json")
+
     p_carve = sub.add_parser("carve", help="Carve fully available tensors from a safetensors file or range slice into a standalone bundle")
     p_carve.add_argument("source")
     p_carve.add_argument("out")
@@ -92,6 +99,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_carve.add_argument("--only-square", action="store_true")
     p_carve.add_argument("--max-tensors", type=int)
     p_carve.add_argument("--json")
+
+    p_family = sub.add_parser("family", help="Summarize loaded tensors by projection family")
+    p_family.add_argument("bundle")
+    p_family.add_argument("--topk", type=int, default=16)
+    p_family.add_argument("--only-square", action="store_true")
+    p_family.add_argument("--name-regex")
+    p_family.add_argument("--json")
 
     p_artifact = sub.add_parser("artifact", help="Audit a packed .ptz artifact for boundary and payload anomalies")
     p_artifact.add_argument("artifact")
@@ -219,6 +233,15 @@ def main() -> None:
         _write_output(json.dumps(result, indent=2), args.json)
         return
 
+    if args.command == "catalog":
+        result = inspect_tensor_bundle(
+            Path(args.source),
+            name_regex=args.name_regex,
+            limit=args.limit,
+        )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
     if args.command == "carve":
         result = carve_safetensors_slice(
             Path(args.source),
@@ -228,6 +251,18 @@ def main() -> None:
             name_regex=args.name_regex,
             max_tensors=args.max_tensors,
         )
+        _write_output(json.dumps(result, indent=2), args.json)
+        return
+
+    if args.command == "family":
+        tensors = load_tensor_bundle(
+            Path(args.bundle),
+            only_2d=True,
+            only_square=args.only_square,
+            name_regex=args.name_regex,
+        )
+        result = summarize_tensor_families(tensors, topk=args.topk)
+        result["bundle"] = str(Path(args.bundle))
         _write_output(json.dumps(result, indent=2), args.json)
         return
 

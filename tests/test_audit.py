@@ -15,7 +15,9 @@ from conker_detect.audit import (
     carve_safetensors_slice,
     compare_bundles,
     inspect_safetensors_file,
+    inspect_tensor_bundle,
     load_safetensors_tensors,
+    summarize_tensor_families,
     spectral_stats,
 )
 
@@ -189,6 +191,48 @@ def test_carve_safetensors_slice_extracts_only_complete_tensors(tmp_path: Path) 
     assert result["skipped_incomplete_tensor_count"] == 1
     assert carved_report["tensor_count"] == 1
     assert carved_report["tensors"][0]["name"] == "a_first"
+
+
+def test_inspect_tensor_bundle_reports_partial_slice(tmp_path: Path) -> None:
+    source = tmp_path / "full.safetensors"
+    partial = tmp_path / "partial.safetensors"
+    _save_file(
+        source,
+        {
+            "a_first": np.eye(2, dtype=np.float32),
+            "z_last": np.ones((4, 4), dtype=np.float32),
+        },
+    )
+    catalog = inspect_safetensors_file(source)
+    first_end = int(catalog["tensors"][0]["file_end"])
+    partial.write_bytes(source.read_bytes()[:first_end])
+
+    report = inspect_tensor_bundle(partial)
+
+    assert report["tensor_count"] == 2
+    assert report["complete_tensor_count"] == 1
+    assert report["tensors"][0]["complete"] is True
+    assert report["tensors"][1]["complete"] is False
+
+
+def test_summarize_tensor_families_groups_projection_stems(tmp_path: Path) -> None:
+    bundle = tmp_path / "model.safetensors"
+    _save_file(
+        bundle,
+        {
+            "model.layers.0.mlp.down_proj.weight": np.eye(2, dtype=np.float32),
+            "model.layers.0.mlp.down_proj.weight_scale_inv": np.ones((2, 2), dtype=np.float32),
+            "model.layers.0.mlp.gate.weight": np.ones((2, 2), dtype=np.float32),
+        },
+    )
+
+    tensors = load_safetensors_tensors(bundle, name_regex="model.layers.0.mlp")
+    result = summarize_tensor_families(tensors)
+
+    assert result["family_count"] == 2
+    families = {row["family"]: row for row in result["families"]}
+    assert families["model.layers.0.mlp.down_proj"]["tensor_count"] == 2
+    assert families["model.layers.0.mlp.gate"]["tensor_count"] == 1
 
 
 def _write_sharded_safetensors_repo(repo_root: Path, shards: dict[str, dict[str, np.ndarray]]) -> None:

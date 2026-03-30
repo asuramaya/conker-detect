@@ -157,6 +157,29 @@ def test_bundle_cli_reads_safetensors_file(tmp_path: Path) -> None:
     assert payload["tensors"][0]["name"] == "model.layers.0.mlp.down_proj.weight"
 
 
+def test_catalog_cli_reports_partial_safetensors_slice(tmp_path: Path) -> None:
+    source = tmp_path / "full.safetensors"
+    partial = tmp_path / "partial.safetensors"
+    out_path = tmp_path / "catalog.json"
+    _save_safetensors(
+        source,
+        {
+            "a_first": np.eye(2, dtype=np.float32),
+            "z_last": np.ones((4, 4), dtype=np.float32),
+        },
+    )
+    _truncate_after_first_tensor(source, partial)
+
+    result = _run_cli("catalog", str(partial), "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["tensor_count"] == 2
+    assert payload["complete_tensor_count"] == 1
+    assert payload["tensors"][0]["complete"] is True
+    assert payload["tensors"][1]["complete"] is False
+
+
 def test_carve_cli_writes_probeable_safetensors_bundle(tmp_path: Path) -> None:
     source = tmp_path / "full.safetensors"
     partial = tmp_path / "partial.bin"
@@ -182,6 +205,28 @@ def test_carve_cli_writes_probeable_safetensors_bundle(tmp_path: Path) -> None:
     assert carve_payload["written_tensor_count"] == 1
     assert bundle_payload["tensor_count"] == 1
     assert bundle_payload["tensors"][0]["name"] == "a_first"
+
+
+def test_family_cli_summarizes_projection_stems(tmp_path: Path) -> None:
+    bundle_path = tmp_path / "model.safetensors"
+    out_path = tmp_path / "family.json"
+    _save_safetensors(
+        bundle_path,
+        {
+            "model.layers.0.mlp.down_proj.weight": np.eye(2, dtype=np.float32),
+            "model.layers.0.mlp.down_proj.weight_scale_inv": np.ones((2, 2), dtype=np.float32),
+            "model.layers.0.mlp.gate.weight": np.ones((2, 2), dtype=np.float32),
+        },
+    )
+
+    result = _run_cli("family", str(bundle_path), "--json", str(out_path))
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(out_path.read_text(encoding="utf-8"))
+    assert payload["family_count"] == 2
+    families = {row["family"]: row for row in payload["families"]}
+    assert families["model.layers.0.mlp.down_proj"]["tensor_count"] == 2
+    assert families["model.layers.0.mlp.gate"]["tensor_count"] == 1
 
 
 def test_submission_cli_writes_json_and_markdown(tmp_path: Path) -> None:
